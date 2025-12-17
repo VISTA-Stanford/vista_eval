@@ -38,7 +38,7 @@ else
     info "Creating default uv environment ($DEFAULT_ENV)"
     uv venv "$DEFAULT_ENV"
     source "$DEFAULT_ENV/bin/activate"
-    uv pip install -r "$DEFAULT_LOCK"
+    uv sync
     deactivate
 fi
 
