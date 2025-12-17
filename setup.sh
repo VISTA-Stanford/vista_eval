@@ -36,7 +36,7 @@ if [[ -d "$DEFAULT_ENV" ]]; then
     warn "Environment '$DEFAULT_ENV' already exists — skipping"
 else
     info "Creating default uv environment ($DEFAULT_ENV)"
-    uv venv "$DEFAULT_ENV"
+    uv venv --python 3.11 "$DEFAULT_ENV"
     source "$DEFAULT_ENV/bin/activate"
     uv sync
     deactivate
@@ -59,7 +59,7 @@ if [[ -d "$LLAVA_ENV" ]]; then
     warn "Environment '$LLAVA_ENV' already exists — skipping"
 else
     info "Creating LLaVA uv environment ($LLAVA_ENV)"
-    uv venv "$LLAVA_ENV"
+    uv venv --python 3.11 "$LLAVA_ENV"
     source "$LLAVA_ENV/bin/activate"
     uv pip install -r "$LLAVA_LOCK"
     deactivate
