@@ -19,7 +19,7 @@ source /pasteur/u/rdcunha/code/mmbu/inference/.venv/bin/activate
 cd /pasteur/u/rdcunha/code/mmbu/inference
 
 ###############################################
-export HF_TOKEN="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"
+export HF_TOKEN="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"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 ###############################################
 
