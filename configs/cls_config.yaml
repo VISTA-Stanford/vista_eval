@@ -5,10 +5,10 @@ model:
 
 tasks:
   - name: "classification_closed_VQA"
-    data_path: "final_cls/final_subsampled_cls_closed_12_15_25.tsv"
+    data_path: "final_cls/final_subsampled_cls_closed_12_29_25.tsv"
 
   - name: "classification_open_VQA"
-    data_path: "final_cls/final_subsampled_cls_open_12_15_25.tsv"
+    data_path: "final_cls/final_subsampled_cls_open_12_29_25.tsv"
 
 runtime:
   batch_size: 10

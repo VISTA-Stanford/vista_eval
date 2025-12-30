@@ -13,15 +13,16 @@ OUT_PATH = "inference_status_report.txt"
 # Mapping result task → TSV path
 # -------------------------------------------------------
 TASK_TO_TSV = {
-    "classification_closed_VQA": "final_cls/final_subsampled_cls_closed_12_15_25.tsv",
-    "classification_open_VQA": "final_cls/final_subsampled_cls_open_12_15_25.tsv",
-    "detection_grounding_closed_VQA": "final_det/final_subsampled_det_grounding_closed_12_15.tsv",
-    "detection_grounding_open_VQA": "final_det/final_subsampled_det_grounding_open_12_15.tsv",
-    "detection_guess_bbox_closed_VQA": "final_det/final_subsampled_det_guess_bbox_closed_12_15.tsv",
-    "detection_guess_bbox_open_VQA": "final_det/final_subsampled_det_guess_bbox_open_12_15.tsv",
-    "segmentation_grounding_closed_VQA": "final_seg/final_subsampled_seg_grounding_closed_12_15.tsv",
-    "segmentation_grounding_open_VQA": "final_seg/final_subsampled_seg_grounding_open_12_15.tsv",
-    "segmentation_guess_bbox_open_VQA": "final_seg/final_subsampled_seg_guess_mask_open_12_15.tsv",
+    "classification_closed_VQA": "final_cls/final_subsampled_cls_closed_12_29_25.tsv",
+    "classification_open_VQA": "final_cls/final_subsampled_cls_open_12_29_25.tsv",
+    "detection_grounding_closed_VQA": "final_det/final_subsampled_det_grounding_closed_12_29.tsv",
+    "detection_grounding_open_VQA": "final_det/final_subsampled_det_grounding_open_12_29.tsv",
+    "detection_guess_bbox_closed_VQA": "final_det/final_subsampled_det_guess_bbox_closed_12_29-v2.tsv",
+    "detection_guess_bbox_open_VQA": "final_det/final_subsampled_det_guess_bbox_open_12_29.tsv",
+    "segmentation_grounding_closed_VQA": "final_seg/final_subsampled_seg_grounding_closed_12_29.tsv",
+    "segmentation_grounding_open_VQA": "final_seg/final_subsampled_seg_grounding_open_12_29.tsv",
+    "segmentation_guess_bbox_open_VQA": "final_seg/final_subsampled_seg_guess_mask_open_12_29.tsv",
+    "segmentation_guess_bbox_closed_VQA": "final_seg/final_subsampled_seg_guess_mask_closed_12_29.tsv",
 }
 
 # Cache TSV sizes so we only load them once

@@ -16,26 +16,31 @@ class PromptDataset(Dataset):
         self.df = df.reset_index(drop=True)
         self.add_options = add_options
 
-        self.images = []
+        # self.images = []
 
-        for _, row in tqdm(self.df.iterrows(), total=len(self.df)):
-            path = row["image_path"]
+        # for _, row in tqdm(self.df.iterrows(), total=len(self.df)):
+        #     path = row["image_path"]
 
-            with Image.open(path) as img:
-                img.load()
-                final_img = img.copy()
-            final_img = pad_to_512(final_img)
+        #     with Image.open(path) as img:
+        #         img.load()
+        #         final_img = img.copy()
+        #     final_img = pad_to_512(final_img)
 
-            self.images.append(final_img)
+        #     self.images.append(final_img)
 
-        print("✅ All images loaded")
+        # print("✅ All images loaded")
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img = self.images[idx]
+        # img = self.images[idx]
+        path = row['image_path']
+        with Image.open(path) as img:
+            img.load()
+            final_img = img.copy()
+        img = pad_to_512(final_img)
 
         base = {
             "index": int(row["index"]),
