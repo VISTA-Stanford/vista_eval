@@ -46,14 +46,14 @@ def main():
     model_cfg = cfg["model"]
     tasks_cfg = cfg["tasks"]
     run_cfg  = cfg["runtime"]
-    output_dir = '/pasteur/u/rdcunha/code/mmbu/results'
+    output_dir = run_cfg["output_dir"]
     
     # model_type = model_cfg["type"]
     # model_name = model_cfg["name"]
     model_type = args.type
     model_name = args.name
     device     = model_cfg.get("device", "auto")
-    cache_dir  = "/pasteur/u/rdcunha/models"
+    cache_dir  = run_cfg["cache_dir"]
 
     os.makedirs(output_dir, exist_ok=True)
     file_model_name = model_name.split('/')[-1]
@@ -68,11 +68,10 @@ def main():
 
     # ----------------------------------
     # Dataset setup
-    # ----------------------------------
-    base_path = '/pasteur/u/rdcunha/data_cache/mmbu/final_data/subsampled_mmbu_data'
-    
+    # ----------------------------------    
     for task_cfg in tasks_cfg:
         print(f"Running task: {task_cfg['name']}")
+        base_path = task_cfg["base_path"]
         out_file = os.path.join(output_dir, f"{file_model_name.replace('/', '_')}_{task_cfg['name']}.jsonl")
         tsv_path = os.path.join(base_path, task_cfg["data_path"])
         df = pd.read_csv(tsv_path, sep='\t')

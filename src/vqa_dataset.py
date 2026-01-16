@@ -1,89 +1,67 @@
 import os
-import json
-import ast
-import hashlib
-import random
-import re
-import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
-from tqdm import tqdm
-from pathlib import Path
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 class PromptDataset(Dataset):
-    def __init__(self, df, add_options=True):
+    def __init__(self, df, prompt_col='dynamic_prompt', add_options=False):
+        """
+        Args:
+            df: Dataframe containing the data.
+            prompt_col: The column name to use for the text prompt.
+            add_options: Whether to append options to the prompt.
+        """
         self.df = df.reset_index(drop=True)
+        self.prompt_col = prompt_col
         self.add_options = add_options
-
-        # self.images = []
-
-        # for _, row in tqdm(self.df.iterrows(), total=len(self.df)):
-        #     path = row["image_path"]
-
-        #     with Image.open(path) as img:
-        #         img.load()
-        #         final_img = img.copy()
-        #     final_img = pad_to_512(final_img)
-
-        #     self.images.append(final_img)
-
-        # print("✅ All images loaded")
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        # img = self.images[idx]
-        path = row['image_path']
-        with Image.open(path) as img:
-            img.load()
-            final_img = img.copy()
-        img = pad_to_512(final_img)
+        
+        # 1. Handle Prompt
+        question = str(row[self.prompt_col])
+        
+        if self.add_options and 'options' in row and pd.notna(row['options']):
+            question = f"{question} Options: {row['options']}"
 
-        base = {
-            "index": int(row["index"]),
-            "question": row["question"],
-            "image_path": row["image_path"],
-            "dataset": row["dataset"],
-            "class_label": row["class_label"],
+        # 2. Handle Image (Robust for text-only or future image use)
+        img = None
+        image_path = row.get('image_path', None)
+        
+        if pd.notna(image_path) and os.path.exists(str(image_path)):
+            try:
+                with Image.open(image_path) as PIL_img:
+                    PIL_img.load()
+                    img = pad_to_512(PIL_img.copy())
+            except Exception as e:
+                print(f"Error loading image at {image_path}: {e}")
+
+        # 3. Build Item
+        item = {
+            "index": row.get("index", idx),
+            "question": question,
+            "image_path": image_path,
             "image": img,
-            "modality": row["modality"],
+            "options": row.get("options", None),
+            # Pass the raw row so the Orchestrator can access all original metadata for saving
+            "raw_row": row 
         }
 
-        if self.add_options:
-            base["question"] = row["question"] + f" Options: {row['options']}"
-            base["options"] = row["options"]
-
-        return base
+        return item
 
 def pad_to_512(img):
-    """
-    Pads image to 512x512 WITHOUT resizing.
-    Image stays top-left aligned.
-    Padding is added ONLY to the right and bottom.
-    """
+    """Pads image to 512x512 with right/bottom padding."""
     w, h = img.size
     size = 512
-
     if w >= size and h >= size:
         return img
-
     pad_w = max(0, size - w)
     pad_h = max(0, size - h)
-
-    # (left, top, right, bottom)
     return ImageOps.expand(img, border=(0, 0, pad_w, pad_h), fill=0)
 
 def prompt_collate(batch):
-    # Keep as list so VLM inference (e.g., vLLM multimodal) works correctly.
+    """Returns the batch as a list of dictionaries."""
     return batch
-
-
-def create_template(item):
-    conversation = {
-        "prompt": f"USER: <image>\n{item['question']}\nASSISTANT:",
-        "multi_modal_data": {"image": item['image']},
-    }
-    return conversation

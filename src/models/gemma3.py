@@ -44,8 +44,28 @@ class Gemma3Adapter(BaseVLMAdapter):
             outputs.append(processor.decode(g, skip_special_tokens=True))
         return outputs
 
+    # def stack_inputs(self, input_list, model):    
+    #     # Stack text
+    #     input_ids = torch.nn.utils.rnn.pad_sequence(
+    #         [inp["input_ids"].squeeze(0) for inp in input_list],
+    #         batch_first=True, padding_value=0
+    #     )
+    #     attn_mask = torch.nn.utils.rnn.pad_sequence(
+    #         [inp["attention_mask"].squeeze(0) for inp in input_list],
+    #         batch_first=True, padding_value=0
+    #     )
+    
+    #     # Stack pixel values
+    #     pixel_values = torch.stack([inp["pixel_values"].squeeze(0) for inp in input_list], dim=0)
+    
+    #     return {
+    #         "input_ids": input_ids.to(model.device),
+    #         "attention_mask": attn_mask.to(model.device),
+    #         "pixel_values": pixel_values.to(model.device, dtype=torch.bfloat16)
+    #     }
+
     def stack_inputs(self, input_list, model):    
-        # Stack text
+        # 1. Stack Text (Standard)
         input_ids = torch.nn.utils.rnn.pad_sequence(
             [inp["input_ids"].squeeze(0) for inp in input_list],
             batch_first=True, padding_value=0
@@ -54,12 +74,20 @@ class Gemma3Adapter(BaseVLMAdapter):
             [inp["attention_mask"].squeeze(0) for inp in input_list],
             batch_first=True, padding_value=0
         )
-    
-        # Stack pixel values
-        pixel_values = torch.stack([inp["pixel_values"].squeeze(0) for inp in input_list], dim=0)
-    
-        return {
+
+        batch = {
             "input_ids": input_ids.to(model.device),
             "attention_mask": attn_mask.to(model.device),
-            "pixel_values": pixel_values.to(model.device, dtype=torch.bfloat16)
         }
+
+        # 2. Conditional Stacking for Vision Data
+        # Only stack if pixel_values exists in the FIRST item of the batch
+        if "pixel_values" in input_list[0]:
+            pixel_values = torch.stack([inp["pixel_values"].squeeze(0) for inp in input_list], dim=0)
+            batch["pixel_values"] = pixel_values.to(model.device, dtype=torch.bfloat16)
+        
+        # Repeat for image_sizes or pixel_attention_mask if Gemma 3 processor provides them
+        if "image_sizes" in input_list[0]:
+            batch["image_sizes"] = torch.stack([inp["image_sizes"].squeeze(0) for inp in input_list], dim=0).to(model.device)
+
+        return batch
