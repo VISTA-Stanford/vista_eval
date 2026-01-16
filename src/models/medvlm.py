@@ -25,13 +25,16 @@ class MedVLM_Adapter(BaseVLMAdapter):
         2. Then provide the correct single-letter choice (A, B, C, D,...) inside <answer>...</answer> tags.
         3. No extra information or text outside of these tags.
         """
+        content = []
+        # Only add image if it exists
+        if item.get("image") is not None:
+            content.append({"type": "image", "image": item["image"]})
+        content.append({"type": "text", "text": QUESTION_TEMPLATE.format(Question=item["question"])})
+        
         conversation = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": item["image"]}, 
-                    {"type": "text", "text": QUESTION_TEMPLATE.format(Question=item["question"])},
-                ],
+                "content": content,
             }
         ]
         return conversation
@@ -49,17 +52,36 @@ class MedVLM_Adapter(BaseVLMAdapter):
             for msgs in messages_batch
         ]
     
-        image_inputs = [
-            process_vision_info(msgs)[0]
-            for msgs in messages_batch
-        ]
-    
-        inputs = processor(
-            text=texts,
-            images=image_inputs,
-            padding="longest",
-            return_tensors="pt"
-        ).to(model.device)
+        # Process images only if they exist in the messages
+        image_inputs = []
+        has_images = False
+        for msgs in messages_batch:
+            try:
+                vision_info = process_vision_info(msgs)
+                if vision_info and len(vision_info) > 0 and vision_info[0] is not None:
+                    image_inputs.append(vision_info[0])
+                    has_images = True
+                else:
+                    image_inputs.append(None)
+            except (ValueError, IndexError, AttributeError):
+                # No images in this message
+                image_inputs.append(None)
+        
+        # Only pass images parameter if at least one image exists
+        if has_images:
+            inputs = processor(
+                text=texts,
+                images=image_inputs,
+                padding="longest",
+                return_tensors="pt"
+            ).to(model.device)
+        else:
+            # Text-only processing
+            inputs = processor(
+                text=texts,
+                padding="longest",
+                return_tensors="pt"
+            ).to(model.device)
     
         return inputs
 

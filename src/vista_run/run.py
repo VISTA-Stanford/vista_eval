@@ -78,6 +78,12 @@ class TaskOrchestrator:
             df['index'] = df.index
 
         timeline_col = next((c for c in df.columns if 'patient_string' in c.lower()), None)
+
+        def truncate_timeline(text, max_chars=5000):
+            if len(str(text)) > max_chars:
+                return str(text)[:max_chars] + "... [TRUNCATED]"
+            return str(text)
+
         
         # 2. Setup Resume Logic
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
@@ -95,6 +101,7 @@ class TaskOrchestrator:
                 print(f"Could not read existing file, starting fresh: {e}")
 
         # 3. Prepare Prompt and Dataset
+        df[timeline_col] = df[timeline_col].apply(truncate_timeline)
         base_prompt_template = self.prompts_map.get(task_name, "[PATIENT_TIMELINE]")
         df['dynamic_prompt'] = df[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 

@@ -21,14 +21,18 @@ class Lingshu_Adapter(BaseVLMAdapter):
         """
         Return a single-sample conversation for Qwen2.5-VL.
         Each sample must be a list of dicts (conversation turns).
+        Supports both image+text and text-only inputs.
         """
+        content = []
+        # Only add image if it exists
+        if item.get("image") is not None:
+            content.append({"type": "image", "image": item["image"]})
+        content.append({"type": "text", "text": item["question"]})
+        
         return [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": item["image"]},
-                    {"type": "text", "text": item["question"]},
-                ],
+                "content": content,
             }
         ]
 
@@ -55,6 +59,7 @@ class Lingshu_Adapter(BaseVLMAdapter):
     def prepare_inputs(self, messages_batch, processor, model):
         """
         messages_batch: list of message dicts for each sample.
+        Supports both image+text and text-only inputs.
         """
         texts = [
             processor.apply_chat_template(
@@ -65,17 +70,36 @@ class Lingshu_Adapter(BaseVLMAdapter):
             for msgs in messages_batch
         ]
     
-        image_inputs = [
-            process_vision_info(msgs)[0]
-            for msgs in messages_batch
-        ]
-    
-        inputs = processor(
-            text=texts,
-            images=image_inputs,
-            padding="longest",
-            return_tensors="pt"
-        ).to(model.device)
+        # Process images only if they exist in the messages
+        image_inputs = []
+        has_images = False
+        for msgs in messages_batch:
+            try:
+                vision_info = process_vision_info(msgs)
+                if vision_info and len(vision_info) > 0 and vision_info[0] is not None:
+                    image_inputs.append(vision_info[0])
+                    has_images = True
+                else:
+                    image_inputs.append(None)
+            except (ValueError, IndexError, AttributeError):
+                # No images in this message
+                image_inputs.append(None)
+        
+        # Only pass images parameter if at least one image exists
+        if has_images:
+            inputs = processor(
+                text=texts,
+                images=image_inputs,
+                padding="longest",
+                return_tensors="pt"
+            ).to(model.device)
+        else:
+            # Text-only processing
+            inputs = processor(
+                text=texts,
+                padding="longest",
+                return_tensors="pt"
+            ).to(model.device)
     
         return inputs
 
