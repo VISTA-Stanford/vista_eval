@@ -4,7 +4,6 @@
 CONFIG_FILE="configs/all_tasks.yaml"
 MAX_MODELS=4
 
-export HF_TOKEN="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"
 
 source /home/dcunhrya/vista_eval/.venv/bin/activate
 
