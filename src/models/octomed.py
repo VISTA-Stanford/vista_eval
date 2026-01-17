@@ -1,6 +1,6 @@
-# # -------------------------------
-# # OctoMed Adapter
-# # -------------------------------
+# -------------------------------
+# OctoMed Adapter
+# -------------------------------
 import torch
 from transformers import AutoProcessor, AutoModelForVision2Seq
 from .base import BaseVLMAdapter
@@ -18,9 +18,18 @@ class OctoMedAdapter(BaseVLMAdapter):
 
     def create_template(self, item):
         content = []
-        # Only add image if it exists
-        if item.get("image") is not None:
-            content.append({"type": "image", "image": item["image"]})
+        # Handle images: text only, one image, or multiple images
+        image = item.get("image")
+        if image is not None:
+            # Check if image is a list (multiple images)
+            if isinstance(image, list):
+                # Add all images from the list
+                for img in image:
+                    content.append({"type": "image", "image": img})
+            else:
+                # Single image
+                content.append({"type": "image", "image": image})
+        # Always add the text question
         content.append({"type": "text", "text": item["question"]})
         
         return [

@@ -8,7 +8,7 @@ from pathlib import Path
 # We set it to the maximum allowed by the system
 csv.field_size_limit(sys.maxsize)
 
-def subsample_csvs(base_path, target_n=10):
+def subsample_csvs(base_path, target_n=50):
     base_dir = Path(base_path)
     
     for csv_path in base_dir.rglob('*.csv'):

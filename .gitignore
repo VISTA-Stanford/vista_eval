@@ -41,6 +41,7 @@ eval/*
 !eval/cls_eval.sh
 !eval/det_eval.sh
 !eval/seg_eval.sh
+!eval/gcp.sh
 
 # configs
 configs/*
@@ -55,4 +56,7 @@ scripts/hold_gpu.sh
 src/run_vlm_eval_gemma2.py
 inference_status_report.txt
 modelnames.txt
+
+# logs
+logs/*
 

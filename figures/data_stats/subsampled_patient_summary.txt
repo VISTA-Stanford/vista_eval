@@ -1,0 +1,62 @@
+VISTA Bench Subsampled Patient Analysis
+=============================================
+
+Subtask Name                                  | Total Patients  | Labeled Patients
+--------------------------------------------------------------------------------
+radiation_outcome_subsampled                  | 109             | 23             
+died_other_cause_4_yr_subsampled              | 100             | 40             
+died_any_cause_2_yr_subsampled                | 100             | 37             
+died_other_cause_3_yr_subsampled              | 100             | 41             
+has_stable_disease_4_yr_subsampled            | 150             | 52             
+has_stable_disease_3_yr_subsampled            | 150             | 61             
+progression_recurrence_free_survival_3_yr_subsampled | 150             | 61             
+progression_recurrence_free_survival_4_yr_subsampled | 150             | 60             
+died_any_cause_1_yr_subsampled                | 100             | 38             
+is_cured_by_horizon_3_yr_subsampled           | 150             | 63             
+died_of_cancer_4_yr_subsampled                | 100             | 33             
+has_progression_nonrecurrence_2_yr_subsampled | 73              | 25             
+died_other_cause_2_yr_subsampled              | 100             | 36             
+has_recurrence_4_yr_subsampled                | 100             | 38             
+has_progression_nonrecurrence_4_yr_subsampled | 77              | 31             
+has_progression_nonrecurrence_5_yr_subsampled | 78              | 32             
+has_stable_disease_5_yr_subsampled            | 150             | 63             
+has_recurrence_3_yr_subsampled                | 100             | 38             
+progression_recurrence_free_survival_2_yr_subsampled | 150             | 54             
+died_of_cancer_5_yr_subsampled                | 100             | 31             
+has_stable_disease_1_yr_subsampled            | 150             | 50             
+progression_recurrence_free_survival_1_yr_subsampled | 150             | 49             
+died_other_cause_1_yr_subsampled              | 100             | 31             
+died_of_cancer_1_yr_subsampled                | 100             | 34             
+has_progression_nonrecurrence_3_yr_subsampled | 75              | 30             
+died_of_cancer_2_yr_subsampled                | 100             | 33             
+progression_recurrence_free_survival_5_yr_subsampled | 150             | 62             
+died_other_cause_5_yr_subsampled              | 100             | 41             
+is_cured_by_horizon_4_yr_subsampled           | 150             | 58             
+died_any_cause_4_yr_subsampled                | 100             | 36             
+has_progression_nonrecurrence_1_yr_subsampled | 72              | 24             
+is_cured_by_horizon_5_yr_subsampled           | 150             | 63             
+died_any_cause_5_yr_subsampled                | 100             | 35             
+is_cured_by_horizon_2_yr_subsampled           | 150             | 67             
+has_stable_disease_2_yr_subsampled            | 150             | 53             
+has_recurrence_5_yr_subsampled                | 100             | 38             
+has_recurrence_1_yr_subsampled                | 80              | 30             
+is_cured_by_horizon_1_yr_subsampled           | 150             | 57             
+died_any_cause_3_yr_subsampled                | 100             | 47             
+has_recurrence_2_yr_subsampled                | 100             | 40             
+died_of_cancer_3_yr_subsampled                | 100             | 37             
+optimal_systemic_therapy_discussed_subsampled | 98              | 71             
+radiation_oligoprogression_discussed_subsampled | 74              | 54             
+progression_assessment_answer_subsampled      | 91              | 61             
+optimal_systemic_therapy_answer_subsampled    | 48              | 35             
+radiation_oligoprogression_answer_subsampled  | 24              | 16             
+pneumonitis_infection_answer_subsampled       | 15              | 14             
+progression_assessment_discussed_subsampled   | 100             | 63             
+pneumonitis_infection_discussed_subsampled    | 65              | 52             
+early_stage_management_answer_subsampled      | 128             | 96             
+early_stage_management_discussed_subsampled   | 100             | 66             
+
+=============================================
+GLOBAL TOTALS (Unique across all subsampled files)
+=============================================
+Total Unique Patients:         1189
+Total Unique Labeled Patients: 469

@@ -65,11 +65,11 @@ class TaskOrchestrator:
     def _process_single_task(self, task_info):
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
-        # source_csv = Path(source_csv.replace('v1_1', 'v1_0'))
         print(f"\n>>> Starting Task: {task_name}")
 
         # 1. Define Paths and identify column
-        csv_path = self.base_path / source_csv / f"{task_name}_subsampled.csv"
+        # csv_path = self.base_path / source_csv / f"{task_name}_subsampled.csv"
+        csv_path = self.base_path / source_csv / f"{task_name}.csv"
         df = pd.read_csv(csv_path)
         
         # Ensure your CSV has a unique index column for tracking. 
@@ -186,4 +186,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     orchestrator = TaskOrchestrator(args.config, args.type, args.name)
-    orchestrator.run_inference(args.tasks)
+    # Use command line tasks if provided, otherwise use config tasks
+    tasks_to_run = args.tasks if args.tasks else orchestrator.cfg.get('tasks', None)
+    orchestrator.run_inference(tasks_to_run)

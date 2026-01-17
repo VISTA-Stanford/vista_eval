@@ -4,7 +4,6 @@
 CONFIG_FILE="configs/all_tasks.yaml"
 MAX_MODELS=4
 
-
 source /home/dcunhrya/vista_eval/.venv/bin/activate
 
 # Extract models from YAML config file using Python

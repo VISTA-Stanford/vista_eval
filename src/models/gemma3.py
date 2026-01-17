@@ -131,6 +131,35 @@ class Gemma3Adapter(BaseVLMAdapter):
             
         return model, processor
 
+    def create_template(self, item):
+        content = []
+        # Handle images: text only, one image, or multiple images
+        image = item.get("image")
+        if image is not None:
+            # Check if image is a list (multiple images)
+            if isinstance(image, list):
+                # Add all images from the list
+                for img in image:
+                    content.append({"type": "image", "image": img})
+            else:
+                # Single image
+                content.append({"type": "image", "image": image})
+        # Always add the text question
+        content.append({"type": "text", "text": item["question"]})
+        
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."}
+                ]
+            },
+            {
+                "role": "user",
+                "content": content,
+            }
+        ]
+
     def prepare_inputs(self, messages, processor, model):
         # messages is list[list[dict]] from build_messages()
         inputs = processor.apply_chat_template(

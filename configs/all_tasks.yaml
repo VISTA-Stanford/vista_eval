@@ -13,17 +13,17 @@ runtime:
   max_new_tokens: 1024
 
 models:
-  - type: "intern"
-    name: "OpenGVLab/InternVL3_5-8B"
+  # - type: "intern"
+  #   name: "OpenGVLab/InternVL3_5-8B"
   
-  - type: "gemma3"
-    name: "google/medgemma-1.5-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-1.5-4b-it"
 
   - type: "octomed"
     name: "OctoMed/OctoMed-7B"
 
-  - type: "qwen3vl"
-    name: "Qwen/Qwen3-VL-8B-Instruct"
+  # - type: "qwen3vl"
+  #   name: "Qwen/Qwen3-VL-8B-Instruct"
 
 tasks:
   - radiation_oligoprogression_answer

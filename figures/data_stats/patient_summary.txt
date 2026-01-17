@@ -1,0 +1,62 @@
+VISTA Bench Patient Analysis Report (Filtered)
+=============================================
+
+Task Name                                     | Total Patients  | Labeled Patients
+--------------------------------------------------------------------------------
+radiation_outcome                             | 191             | 43             
+is_cured_by_horizon_3_yr                      | 1238            | 464            
+has_progression_nonrecurrence_2_yr            | 1238            | 464            
+died_other_cause_1_yr                         | 1238            | 464            
+is_cured_by_horizon_1_yr                      | 1238            | 464            
+died_any_cause_4_yr                           | 1238            | 464            
+died_other_cause_5_yr                         | 1238            | 464            
+died_other_cause_2_yr                         | 1238            | 464            
+is_cured_by_horizon_2_yr                      | 1238            | 464            
+died_of_cancer_1_yr                           | 1238            | 464            
+died_of_cancer_3_yr                           | 1238            | 464            
+progression_recurrence_free_survival_4_yr     | 1238            | 464            
+died_of_cancer_2_yr                           | 1238            | 464            
+has_progression_nonrecurrence_5_yr            | 1238            | 464            
+died_of_cancer_5_yr                           | 1238            | 464            
+has_stable_disease_3_yr                       | 1238            | 464            
+has_stable_disease_1_yr                       | 1238            | 464            
+progression_recurrence_free_survival_5_yr     | 1238            | 464            
+progression_recurrence_free_survival_3_yr     | 1238            | 464            
+progression_recurrence_free_survival_1_yr     | 1238            | 464            
+has_recurrence_2_yr                           | 1238            | 464            
+has_progression_nonrecurrence_4_yr            | 1238            | 464            
+has_stable_disease_5_yr                       | 1238            | 464            
+has_recurrence_3_yr                           | 1238            | 464            
+has_stable_disease_2_yr                       | 1238            | 464            
+progression_recurrence_free_survival_2_yr     | 1238            | 464            
+died_any_cause_1_yr                           | 1238            | 464            
+has_recurrence_5_yr                           | 1238            | 464            
+has_recurrence_1_yr                           | 1238            | 464            
+died_any_cause_2_yr                           | 1238            | 464            
+died_any_cause_5_yr                           | 1238            | 464            
+has_stable_disease_4_yr                       | 1238            | 464            
+died_of_cancer_4_yr                           | 1238            | 464            
+is_cured_by_horizon_5_yr                      | 1238            | 464            
+has_progression_nonrecurrence_3_yr            | 1238            | 464            
+died_other_cause_3_yr                         | 1238            | 464            
+died_any_cause_3_yr                           | 1238            | 464            
+has_progression_nonrecurrence_1_yr            | 1238            | 464            
+is_cured_by_horizon_4_yr                      | 1238            | 464            
+has_recurrence_4_yr                           | 1238            | 464            
+died_other_cause_4_yr                         | 1238            | 464            
+progression_assessment_answer                 | 91              | 61             
+early_stage_management_answer                 | 128             | 96             
+radiation_oligoprogression_answer             | 24              | 16             
+early_stage_management_discussed              | 263             | 178            
+pneumonitis_infection_answer                  | 15              | 14             
+optimal_systemic_therapy_discussed            | 263             | 178            
+pneumonitis_infection_discussed               | 263             | 178            
+radiation_oligoprogression_discussed          | 263             | 178            
+progression_assessment_discussed              | 263             | 178            
+optimal_systemic_therapy_answer               | 48              | 35             
+
+=============================================
+GLOBAL TOTALS (Cross-File Unique)
+=============================================
+Total Unique Patients:         1266
+Total Unique Labeled Patients: 498
