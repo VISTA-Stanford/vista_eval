@@ -1,0 +1,33 @@
+paths:
+  base_dir: "/home/dcunhrya/vista_bench"
+  results_dir: "/home/dcunhrya/results"
+  valid_tasks: "tasks/valid_tasks.json"
+  prompts: "tasks/prompts_by_task.json"
+
+model:
+  device: "cuda"
+
+runtime:
+  cache_dir: "/home/dcunhrya/model_cache"
+  batch_size: 10
+  max_new_tokens: 1024
+
+models:
+  - type: "intern"
+    name: "OpenGVLab/InternVL3_5-8B"
+  
+  - type: "gemma3"
+    name: "google/medgemma-1.5-4b-it"
+
+  - type: "octomed"
+    name: "OctoMed/OctoMed-7B"
+
+  - type: "qwen3vl"
+    name: "Qwen/Qwen3-VL-8B-Instruct"
+
+tasks:
+  - radiation_oligoprogression_answer
+  - radiation_outcome
+  - progression_assessment_discussed
+  - pneumonitis_infection_discussed
+  - pneumonitis_infection_answer
