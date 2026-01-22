@@ -27,7 +27,7 @@ models:
 
 tasks:
   - radiation_oligoprogression_answer
-  - radiation_outcome
-  - progression_assessment_discussed
-  - pneumonitis_infection_discussed
-  - pneumonitis_infection_answer
+  # - radiation_outcome
+  # - progression_assessment_discussed
+  # - pneumonitis_infection_discussed
+  # - pneumonitis_infection_answer

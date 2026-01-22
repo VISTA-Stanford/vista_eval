@@ -121,7 +121,7 @@ def generate_filtered_comparison_plots(results_path='/home/dcunhrya/results', mi
         plt.tight_layout()
         
         # Save plot
-        save_path = os.path.join('/home/dcunhrya/vista_eval/figures', f"{source}_filtered_comparison_plot.pdf")
+        save_path = os.path.join('/home/dcunhrya/vista_eval/figures/eval_results', f"{source}_filtered_comparison_plot.pdf")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
         print(f"Plot saved for {source} at {save_path}")

@@ -7,6 +7,7 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+from google.cloud import bigquery  # NEW IMPORT
 
 from vqa_dataset import PromptDataset, prompt_collate
 from models import load_model_adapter
@@ -28,7 +29,6 @@ class TaskOrchestrator:
         
         # 3. Load Task Registries
         valid_task_path = os.path.join(self.base_path, self.cfg['paths']['valid_tasks'])
-
         prompts_path = os.path.join(self.base_path, self.cfg['paths']['prompts'])
 
         with open(valid_task_path, 'r') as f:
@@ -36,7 +36,12 @@ class TaskOrchestrator:
         with open(prompts_path, 'r') as f:
             self.prompts_map = json.load(f)
 
-        # 4. Initialize Model
+        # 4. Initialize BigQuery Client (NEW)
+        # We default to the specific project mentioned. 
+        self.project_id = "som-nero-plevriti-deidbdf"
+        self.bq_client = bigquery.Client(project=self.project_id)
+
+        # 5. Initialize Model
         self.adapter = load_model_adapter(
             self.model_type, 
             self.model_name, 
@@ -64,31 +69,62 @@ class TaskOrchestrator:
 
     def _process_single_task(self, task_info):
         task_name = task_info['task_name']
-        source_csv = task_info['task_source_csv']
+        source_csv = task_info['task_source_csv'] # Acts as Table ID (e.g., 'oncology')
         print(f"\n>>> Starting Task: {task_name}")
 
-        # 1. Define Paths and identify column
-        # csv_path = self.base_path / source_csv / f"{task_name}_subsampled.csv"
-        csv_path = self.base_path / source_csv / f"{task_name}.csv"
-        df = pd.read_csv(csv_path)
+        # --- BIGQUERY LOADING START ---
+        # Construct Table ID: project.dataset.table
+        dataset_id = "vista_bench_v1_1"
+        full_table_id = f"{self.project_id}.{dataset_id}.{source_csv}"
         
-        # Ensure your CSV has a unique index column for tracking. 
-        # If not, we use the dataframe index.
+        print(f"    Querying BigQuery table: {full_table_id} for task='{task_name}'...")
+        
+        query = f"""
+            SELECT *
+            FROM `{full_table_id}`
+            WHERE task = @task_name
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("task", "STRING", task_name)
+            ]
+        )
+
+        try:
+            df = self.bq_client.query(query, job_config=job_config).to_dataframe()
+        except Exception as e:
+            print(f"!!! BigQuery Error for {task_name}: {e}")
+            return
+
+        if df.empty:
+            print(f"!!! No data found for task '{task_name}' in BigQuery.")
+            return
+            
+        print(f"    Loaded {len(df)} rows from BigQuery.")
+        # --- BIGQUERY LOADING END ---
+        
+        # Ensure unique index for tracking
         if 'index' not in df.columns:
             df['index'] = df.index
 
+        # Dynamic Column Detection (works for BQ dataframe too)
         timeline_col = next((c for c in df.columns if 'patient_string' in c.lower()), None)
+        
+        if not timeline_col:
+            print(f"!!! Error: Column 'patient_string' (or similar) not found in BQ results.")
+            return
 
+        # Define OOM Protection Truncator
         def truncate_timeline(text, max_chars=5000):
             if len(str(text)) > max_chars:
                 return str(text)[:max_chars] + "... [TRUNCATED]"
             return str(text)
 
-        
         # 2. Setup Resume Logic
+        # We keep the local folder structure for results
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
         save_dir.mkdir(parents=True, exist_ok=True)
-        out_file = save_dir / f"{task_name}_subsampled_results.csv"
+        out_file = save_dir / f"{task_name}_results.csv"
 
         existing_indices = set()
         if out_file.exists():
@@ -119,6 +155,7 @@ class TaskOrchestrator:
         batch_counter = 0
 
         for batch in tqdm(loader, desc=f"Inference {task_name}"):
+            # Skip items already processed
             new_items = [item for item in batch if item['raw_row']['index'] not in existing_indices]
             
             if not new_items:
@@ -140,16 +177,19 @@ class TaskOrchestrator:
                 
                 # Process outputs
                 for item, out_text in zip(new_items, outputs):
+                    # We drop the heavy timeline column before saving to CSV
                     res_row = item['raw_row'].drop(labels=[timeline_col]).to_dict()
                     res_row['model_response'] = out_text
                     results_buffer.append(res_row)
                 
                 batch_counter += 1
 
-                if batch_counter % 10 == 0:
+                # Flush to disk every 20 batches
+                if batch_counter % 20 == 0:
                     self._append_to_csv(out_file, results_buffer)
-                    results_buffer = [] # Clear buffer after writing
+                    results_buffer = [] 
 
+                # Clear CUDA cache periodically
                 if batch_counter % 5 == 0:
                     torch.cuda.empty_cache()
 
@@ -167,15 +207,6 @@ class TaskOrchestrator:
         # If file doesn't exist, write with header; else append without header
         header = not file_path.exists()
         new_df.to_csv(file_path, mode='a', index=False, header=header)
-
-    def _save_results(self, task_name, source_csv, results):
-        # Format: /results/{source_csv}/{task_name}/{model_name}
-        save_dir = self.results_base / source_csv / task_name / self.file_model_name
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        output_df = pd.DataFrame(results)
-        output_df.to_csv(save_dir / f"{task_name}_results.csv", index=False)
-        print(f"Saved {len(results)} rows to {save_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

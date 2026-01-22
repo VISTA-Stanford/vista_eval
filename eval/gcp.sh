@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Configuration
 CONFIG_FILE="configs/all_tasks.yaml"
