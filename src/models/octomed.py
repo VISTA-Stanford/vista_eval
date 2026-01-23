@@ -11,9 +11,15 @@ class OctoMedAdapter(BaseVLMAdapter):
             self.model_name,
             torch_dtype=torch.bfloat16,
             device_map=self.device,
+            attn_implementation="flash_attention_2",
             cache_dir=self.cache_dir
         )
         processor = AutoProcessor.from_pretrained(self.model_name)
+        if hasattr(processor, "tokenizer"):
+            processor.tokenizer.padding_side = "left"
+            if processor.tokenizer.pad_token is None:
+                processor.tokenizer.pad_token = processor.tokenizer.eos_token
+        
         return model, processor
 
     def create_template(self, item):

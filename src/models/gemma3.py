@@ -118,7 +118,8 @@ class Gemma3Adapter(BaseVLMAdapter):
             self.model_name,
             device_map=self.device,
             cache_dir=self.cache_dir,
-            torch_dtype=torch.bfloat16 # Use bfloat16 for Gemma 3
+            torch_dtype=torch.bfloat16, # Use bfloat16 for Gemma 3
+            attn_implementation="flash_attention_2",
         ).eval()
         
         processor = AutoProcessor.from_pretrained(self.model_name)

@@ -2,6 +2,7 @@ import os
 import argparse
 import json
 import yaml
+import re
 import torch
 import pandas as pd
 from pathlib import Path
@@ -59,13 +60,18 @@ class TaskOrchestrator:
         if task_names:
             tasks_to_run = [t for t in self.valid_tasks if t['task_name'] in task_names]
 
-        for task_info in tasks_to_run:
-            self._process_single_task(task_info)
+        # Get experiments from config (default to ['no_image'] if not specified)
+        experiments = self.cfg.get('experiments', ['no_1_image'])
 
-    def _process_single_task(self, task_info):
+        # Run each task for each experiment
+        for task_info in tasks_to_run:
+            for experiment in experiments:
+                self._process_single_task(task_info, experiment)
+
+    def _process_single_task(self, task_info, experiment='no_image'):
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
-        print(f"\n>>> Starting Task: {task_name}")
+        print(f"\n>>> Starting Task: {task_name} | Experiment: {experiment}")
 
         # 1. Define Paths and identify column
         # csv_path = self.base_path / source_csv / f"{task_name}_subsampled.csv"
@@ -79,16 +85,68 @@ class TaskOrchestrator:
 
         timeline_col = next((c for c in df.columns if 'patient_string' in c.lower()), None)
 
-        def truncate_timeline(text, max_chars=5000):
-            if len(str(text)) > max_chars:
-                return str(text)[:max_chars] + "... [TRUNCATED]"
-            return str(text)
+        def truncate_timeline(text, truncation_config=None):
+            """
+            Truncate timeline based on configuration.
+            
+            Args:
+                text: The timeline text to truncate
+                truncation_config: Dict with keys:
+                    - 'mode': 'max_chars' or 'last_k_events'
+                    - 'max_chars': int (for max_chars mode)
+                    - 'k': int (for last_k_events mode)
+            
+            Returns:
+                Truncated timeline string
+            """
+            if truncation_config is None:
+                # Default: no truncation
+                return str(text)
+            
+            text_str = str(text)
+            mode = truncation_config.get('mode', 'max_chars')
+            
+            if mode == 'max_chars':
+                max_chars = truncation_config.get('max_chars', 5000)
+                if len(text_str) > max_chars:
+                    return text_str[:max_chars] + "... [TRUNCATED]"
+                return text_str
+            
+            elif mode == 'last_k_events':
+                k = truncation_config.get('k', 10)
+                
+                # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
+                # Find all event start positions
+                # Pattern matches: [ followed by date/time, followed by ] |
+                pattern = r'\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\]\s*\|'
+                
+                # Find all matches with their positions
+                matches = list(re.finditer(pattern, text_str))
+                
+                if len(matches) == 0:
+                    # No event markers found, return original text
+                    return text_str
+                
+                if len(matches) <= k:
+                    # Fewer or equal events than k, return all
+                    return text_str
+                
+                # Take the last k events
+                # Start from the (len(matches) - k)-th match
+                start_match = matches[len(matches) - k]
+                truncated = text_str[start_match.start():]
+                
+                return truncated
+            
+            else:
+                # Unknown mode, return original
+                return text_str
 
         
         # 2. Setup Resume Logic
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
         save_dir.mkdir(parents=True, exist_ok=True)
-        out_file = save_dir / f"{task_name}_subsampled_results.csv"
+        out_file = save_dir / f"{task_name}_subsampled_results_{experiment}.csv"
 
         existing_indices = set()
         if out_file.exists():
@@ -101,11 +159,13 @@ class TaskOrchestrator:
                 print(f"Could not read existing file, starting fresh: {e}")
 
         # 3. Prepare Prompt and Dataset
-        df[timeline_col] = df[timeline_col].apply(truncate_timeline)
+        # Get truncation config from YAML
+        truncation_config = self.cfg.get('timeline_truncation', None)
+        df[timeline_col] = df[timeline_col].apply(lambda x: truncate_timeline(x, truncation_config))
         base_prompt_template = self.prompts_map.get(task_name, "[PATIENT_TIMELINE]")
         df['dynamic_prompt'] = df[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
-        dataset = PromptDataset(df=df, prompt_col='dynamic_prompt') 
+        dataset = PromptDataset(df=df, prompt_col='dynamic_prompt', experiment=experiment) 
         loader = DataLoader(
             dataset,
             batch_size=self.cfg['runtime']['batch_size'],

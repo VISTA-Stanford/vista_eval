@@ -16,18 +16,34 @@ models:
   # - type: "intern"
   #   name: "OpenGVLab/InternVL3_5-8B"
   
-  # - type: "gemma3"
-  #   name: "google/medgemma-1.5-4b-it"
+  - type: "gemma3"
+    name: "google/medgemma-1.5-4b-it"
 
-  - type: "octomed"
-    name: "OctoMed/OctoMed-7B"
+  # - type: "octomed"
+  #   name: "OctoMed/OctoMed-7B"
 
   # - type: "qwen3vl"
   #   name: "Qwen/Qwen3-VL-8B-Instruct"
 
 tasks:
   - radiation_oligoprogression_answer
-  # - radiation_outcome
-  # - progression_assessment_discussed
-  # - pneumonitis_infection_discussed
-  # - pneumonitis_infection_answer
+  - radiation_outcome
+  - progression_assessment_discussed
+  - pneumonitis_infection_discussed
+  - pneumonitis_infection_answer
+
+experiments:
+  - no_image
+  - axial_1_image
+  - all_image
+  - axial_all_image
+
+# Timeline truncation configuration
+# Choose one of two modes:
+# 1. 'max_chars': Truncate to first N characters (specify max_chars)
+# 2. 'last_k_events': Take the last k patient events (specify k)
+# Events are identified by the pattern: [YYYY-MM-DD HH:MM] |
+timeline_truncation:
+  mode: "max_chars"  # Options: "max_chars" or "last_k_events"
+  max_chars: 5000     # Used when mode is "max_chars"
+  # k: 10             # Used when mode is "last_k_events" (uncomment and set value)

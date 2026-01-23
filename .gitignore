@@ -60,3 +60,5 @@ modelnames.txt
 # logs
 logs/*
 
+# figures
+figures/*

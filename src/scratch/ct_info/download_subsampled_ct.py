@@ -1,82 +1,3 @@
-# import os
-# import pandas as pd
-# from pathlib import Path
-# from google.cloud import storage
-
-# def download_ct_scans(csv_path='/home/dcunhrya/results/ct_paths.csv', 
-#                       bucket_name='su-vista-uscentral1',
-#                       prefix='chaudhari_lab/ct_data/ct_scans/vista/nov25',
-#                       dry_run=True):
-#     """
-#     Checks or downloads NIfTI files from GCP.
-#     dry_run=True: Only counts present/missing files without downloading.
-#     """
-#     client = storage.Client()
-#     bucket = client.bucket(bucket_name)
-    
-#     if not os.path.exists(csv_path):
-#         print(f"Error: {csv_path} not found.")
-#         return
-    
-#     df = pd.read_csv(csv_path)
-#     paths = df['path'].unique().tolist() # Ensure we only check unique entries
-    
-#     stats = {"present": 0, "missing": 0, "already_on_vm": 0}
-    
-#     print(f"{' [DRY RUN MODE] ' if dry_run else ' [LIVE DOWNLOAD MODE] '}")
-#     print(f"Processing {len(paths)} unique paths...")
-
-#     for local_path_str in paths:
-#         try:
-#             # 1. Filename Transformation Logic
-#             parts = local_path_str.split('/')
-#             filename_no_ext = parts[-1].replace('.zip', '')
-#             bucket_filename = f"{parts[-2]}__{filename_no_ext}.nii.gz"
-#             blob_path = f"{prefix}/{bucket_filename}"
-            
-#             # 2. Local Path Setup
-#             local_file_path = Path(local_path_str)
-#             local_download_path = local_file_path.with_suffix('').with_suffix('.nii.gz')
-
-#             # 3. Check Bucket
-#             blob = bucket.blob(blob_path)
-#             exists_in_bucket = blob.exists()
-
-#             if exists_in_bucket:
-#                 stats["present"] += 1
-#                 if local_download_path.exists():
-#                     stats["already_on_vm"] += 1
-                
-#                 if not dry_run and not local_download_path.exists():
-#                     # Ensure directory exists before downloading
-#                     local_download_path.parent.mkdir(parents=True, exist_ok=True)
-#                     print(f"  [DOWNLOADING] {bucket_filename}")
-#                     blob.download_to_filename(str(local_download_path))
-#             else:
-#                 stats["missing"] += 1
-#                 print(f"  [MISSING] {blob_path}")
-
-#         except Exception as e:
-#             print(f"  [ERROR] Failed to process {local_path_str}: {e}")
-
-#     # 4. Final Summary
-#     print("\n" + "="*40)
-#     print(" SCAN SUMMARY ")
-#     print("="*40)
-#     print(f"Total Paths in CSV:    {len(paths)}")
-#     print(f"Present in Bucket:     {stats['present']}")
-#     print(f"Missing from Bucket:   {stats['missing']}")
-#     print(f"Already on VM:         {stats['already_on_vm']}")
-    
-#     if len(paths) > 0:
-#         availability = (stats['present'] / len(paths)) * 100
-#         print(f"Bucket Availability:   {availability:.2f}%")
-#     print("="*40)
-
-# if __name__ == "__main__":
-#     # Toggle dry_run to False when you are ready to pull the data
-#     download_ct_scans(dry_run=True)
-
 import os
 import pandas as pd
 import yaml
@@ -105,13 +26,15 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
                       prefix='chaudhari_lab/ct_data/ct_scans/vista/nov25',
                       dry_run=True,
                       config_path=None,
-                      download_base_dir='/home/dcunhrya/downloaded_ct_scans'):
+                      download_base_dir='/home/dcunhrya/downloaded_ct_scans',
+                      file_suffix='_subsampled'):
     """
     Checks or downloads NIfTI files from GCP, reporting Task and Person ID.
-    Finds all subsampled CSV files and processes them.
+    Finds all CSV files with the specified suffix and processes them.
     dry_run=True: Only counts present/missing files without downloading.
     config_path: Optional path to YAML config file. If provided, only processes tasks listed in config.
     download_base_dir: Base directory where files will be downloaded, maintaining bucket structure.
+    file_suffix: Suffix to look for in CSV filenames (e.g., '_subsampled' or '_all_ct'). Default: '_subsampled'.
     """
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -130,28 +53,28 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
         else:
             print(f"Warning: No tasks found in config or error loading config. Processing all tasks.")
     
-    # Find all subsampled CSV files
-    all_csv_files = [p for p in base_dir.rglob("*.csv") if '_subsampled' in p.stem]
+    # Find all CSV files with the specified suffix
+    all_csv_files = [p for p in base_dir.rglob("*.csv") if p.stem.endswith(file_suffix)]
     
     if not all_csv_files:
-        print(f"No subsampled CSV files found in {base_path}")
+        print(f"No CSV files with suffix '{file_suffix}' found in {base_path}")
         return
     
     # Filter by task names if config provided
     csv_files = []
     if valid_tasks:
         for csv_path in all_csv_files:
-            # Extract task name from filename (remove _subsampled suffix)
-            task_name = csv_path.stem.replace('_subsampled', '')
+            # Extract task name from filename (remove file_suffix suffix)
+            task_name = csv_path.stem.replace(file_suffix, '')
             if task_name in valid_tasks:
                 csv_files.append(csv_path)
-        print(f"Filtered to {len(csv_files)} subsampled CSVs matching tasks from config (out of {len(all_csv_files)} total).")
+        print(f"Filtered to {len(csv_files)} CSVs with suffix '{file_suffix}' matching tasks from config (out of {len(all_csv_files)} total).")
     else:
         csv_files = all_csv_files
-        print(f"Found {len(csv_files)} subsampled CSV files.")
+        print(f"Found {len(csv_files)} CSV files with suffix '{file_suffix}'.")
     
     if not csv_files:
-        print("No matching subsampled CSV files found.")
+        print(f"No matching CSV files with suffix '{file_suffix}' found.")
         return
     
     # Read all matching CSV files and combine
@@ -159,7 +82,7 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
     for csv_file in csv_files:
         try:
             # Extract task name from filename
-            task_name = csv_file.stem.replace('_subsampled', '')
+            task_name = csv_file.stem.replace(file_suffix, '')
             
             # Read CSV file
             df = pd.read_csv(csv_file, sep=None, engine='python', on_bad_lines='warn')
@@ -192,7 +115,7 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
             print(f"  [ERROR] Failed to process {csv_file.name}: {e}")
     
     if not all_records:
-        print("No valid records found in subsampled CSV files.")
+        print(f"No valid records found in CSV files with suffix '{file_suffix}'.")
         return
     
     # Combine all dataframes
@@ -272,10 +195,15 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
 
 if __name__ == "__main__":
     # Toggle dry_run to False when you are ready to pull the data
-    # Option 1: Process all subsampled CSVs (default behavior)
+    # Option 1: Process all CSVs with default suffix '_subsampled' (default behavior)
     # download_ct_scans(dry_run=True)
     
-    # Option 2: Filter by tasks from YAML config
+    # Option 2: Filter by tasks from YAML config with default '_subsampled' suffix
+    # BASE_PATH = "/home/dcunhrya/vista_bench"
+    # CONFIG_PATH = "/home/dcunhrya/vista_eval/configs/all_tasks.yaml"
+    # download_ct_scans(base_path=BASE_PATH, dry_run=True, config_path=CONFIG_PATH)
+    
+    # Option 3: Use '_all_ct' suffix instead
     BASE_PATH = "/home/dcunhrya/vista_bench"
     CONFIG_PATH = "/home/dcunhrya/vista_eval/configs/all_tasks.yaml"
-    download_ct_scans(base_path=BASE_PATH, dry_run=False, config_path=CONFIG_PATH)
+    download_ct_scans(base_path=BASE_PATH, dry_run=True, config_path=CONFIG_PATH, file_suffix='_all_ct')
