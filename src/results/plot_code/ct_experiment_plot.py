@@ -9,7 +9,7 @@ from results.results_analyzer import DynamicResultsAnalyzer
 def _extract_answer(text):
     """
     Extracts the core answer from the model's raw output.
-    Prioritizes <answer> tags, then Pipe |, then fallback.
+    Prioritizes <answer> tags, then <label> tags, then double quotes, then Pipe |, then fallback.
     Handles quotes, extra formatting, and various edge cases.
     """
     if pd.isna(text):
@@ -26,7 +26,22 @@ def _extract_answer(text):
         answer = tag_match.group(1).strip()
         return _clean_extracted_answer(answer)
     
-    # 2. Fallback to everything after the Pipe delimiter
+    # 2. Regex for <label> tags (case-insensitive, handles newlines)
+    label_match = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
+    if label_match:
+        answer = label_match.group(1).strip()
+        return _clean_extracted_answer(answer)
+    
+    # 3. Extract content between double quotes (handles cases like "Yes" or "No")
+    # Look for content between double quotes that might be the answer
+    double_quote_match = re.search(r'"([^"]+)"', text)
+    if double_quote_match:
+        answer = double_quote_match.group(1).strip()
+        # Only use this if it looks like a reasonable answer (not too long, not just whitespace)
+        if answer and len(answer) < 200:  # Reasonable answer length
+            return _clean_extracted_answer(answer)
+    
+    # 4. Fallback to everything after the Pipe delimiter
     if '|' in text:
         # Split by | and take the last part (most likely to be the answer)
         parts = text.split('|')
@@ -39,7 +54,7 @@ def _extract_answer(text):
         
         return _clean_extracted_answer(answer)
     
-    # 3. Final fallback: Cleaned version of original text
+    # 5. Final fallback: Cleaned version of original text
     return _clean_extracted_answer(text)
 
 def _clean_extracted_answer(answer):
