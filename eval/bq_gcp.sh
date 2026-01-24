@@ -94,9 +94,9 @@ run_model() {
     export CUDA_VISIBLE_DEVICES=$gpu_id
     
     if [ -z "$TASK_LIST" ]; then
-        python3 src/vista_run/run.py --config "$CONFIG_FILE" --type "$model_type" --name "$model_name" > "$log_file" 2>&1
+        python3 src/vista_run/run_bq.py --config "$CONFIG_FILE" --type "$model_type" --name "$model_name" > "$log_file" 2>&1
     else
-        python3 src/vista_run/run.py --config "$CONFIG_FILE" --type "$model_type" --name "$model_name" --tasks $TASK_LIST > "$log_file" 2>&1
+        python3 src/vista_run/run_bq.py --config "$CONFIG_FILE" --type "$model_type" --name "$model_name" --tasks $TASK_LIST > "$log_file" 2>&1
     fi
     
     local exit_code=$?

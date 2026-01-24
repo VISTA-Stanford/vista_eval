@@ -13,11 +13,14 @@ runtime:
   max_new_tokens: 1024
 
 models:
-  # - type: "intern"
-  #   name: "OpenGVLab/InternVL3_5-8B"
+  - type: "intern"
+    name: "OpenGVLab/InternVL3_5-8B"
   
-  - type: "gemma3"
-    name: "google/medgemma-1.5-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-1.5-4b-it"
+
+  # - type: "gemma3"
+  #   name: "google/medgemma-4b-it"
 
   # - type: "octomed"
   #   name: "OctoMed/OctoMed-7B"
@@ -34,9 +37,10 @@ tasks:
 
 experiments:
   - no_image
-  - axial_1_image
+  # - axial_1_image
   - all_image
   - axial_all_image
+  - sagittal_all_image
 
 # Timeline truncation configuration
 # Choose one of two modes:
@@ -44,6 +48,6 @@ experiments:
 # 2. 'last_k_events': Take the last k patient events (specify k)
 # Events are identified by the pattern: [YYYY-MM-DD HH:MM] |
 timeline_truncation:
-  mode: "max_chars"  # Options: "max_chars" or "last_k_events"
-  max_chars: 5000     # Used when mode is "max_chars"
-  # k: 10             # Used when mode is "last_k_events" (uncomment and set value)
+  mode: "last_k_events"  # Options: "max_chars" or "last_k_events"
+  # max_chars: 5000     # Used when mode is "max_chars"
+  k: 5             # Used when mode is "last_k_events"

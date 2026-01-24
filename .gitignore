@@ -38,9 +38,7 @@ src/LLaVA-Med/
 # eval
 eval/*
 !eval/
-!eval/cls_eval.sh
-!eval/det_eval.sh
-!eval/seg_eval.sh
+!eval/bq_gcp.sh
 !eval/gcp.sh
 
 # configs

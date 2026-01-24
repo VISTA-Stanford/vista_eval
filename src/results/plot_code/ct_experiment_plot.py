@@ -10,20 +10,82 @@ def _extract_answer(text):
     """
     Extracts the core answer from the model's raw output.
     Prioritizes <answer> tags, then Pipe |, then fallback.
+    Handles quotes, extra formatting, and various edge cases.
     """
+    if pd.isna(text):
+        return ""
+    
     text = str(text).strip()
+    
+    if not text:
+        return ""
     
     # 1. Regex for <answer> tags (case-insensitive, handles newlines)
     tag_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
     if tag_match:
-        return tag_match.group(1).strip()
+        answer = tag_match.group(1).strip()
+        return _clean_extracted_answer(answer)
     
     # 2. Fallback to everything after the Pipe delimiter
     if '|' in text:
-        return text.split('|')[-1].strip()
+        # Split by | and take the last part (most likely to be the answer)
+        parts = text.split('|')
+        answer = parts[-1].strip()
+        
+        # If there are multiple parts, also check the second-to-last in case
+        # the last part is empty or just whitespace
+        if not answer and len(parts) > 1:
+            answer = parts[-2].strip()
+        
+        return _clean_extracted_answer(answer)
     
     # 3. Final fallback: Cleaned version of original text
-    return text
+    return _clean_extracted_answer(text)
+
+def _clean_extracted_answer(answer):
+    """
+    Cleans the extracted answer by removing quotes, extra whitespace, and formatting artifacts.
+    """
+    if not answer:
+        return ""
+    
+    # Remove leading/trailing whitespace and newlines
+    answer = answer.strip()
+    
+    # Remove quotes (both single and double) if they wrap the entire answer
+    # Handle cases like: "Yes" or 'No' or "Yes, the patient..."
+    if (answer.startswith('"') and answer.endswith('"')) or \
+       (answer.startswith("'") and answer.endswith("'")):
+        answer = answer[1:-1].strip()
+    
+    # Remove common prefixes that might appear
+    prefixes_to_remove = [
+        r'^answer:\s*',
+        r'^response:\s*',
+        r'^the answer is\s*',
+        r'^answer is\s*',
+        r'^the response is\s*',
+        r'^response is\s*',
+    ]
+    for prefix in prefixes_to_remove:
+        answer = re.sub(prefix, '', answer, flags=re.IGNORECASE)
+        answer = answer.strip()
+    
+    # Remove extra whitespace and normalize newlines
+    answer = re.sub(r'\s+', ' ', answer)  # Replace multiple whitespace with single space
+    answer = re.sub(r'\n+', ' ', answer)  # Replace newlines with space
+    
+    # Remove common suffixes that might be artifacts (be conservative)
+    # Only remove if they look like metadata, not part of the actual answer
+    suffixes_to_remove = [
+        r'\s*\[TRUNCATED.*?\]\s*$',  # Remove trailing [TRUNCATED...]
+        r'\s*\[.*?truncated.*?\]\s*$',  # Remove trailing [something truncated]
+    ]
+    for suffix in suffixes_to_remove:
+        answer = re.sub(suffix, '', answer, flags=re.IGNORECASE)
+        answer = answer.strip()
+    
+    return answer.strip()
 
 def _clean_question(text):
     """
@@ -38,10 +100,10 @@ def _clean_question(text):
 def extract_experiment_from_filename(filename):
     """
     Extract experiment name from filename like:
-    task_name_subsampled_results_experiment.csv
+    task_name_results_experiment.csv
     Returns experiment name or 'default' if pattern doesn't match
     """
-    match = re.search(r'_subsampled_results_(.+)\.csv$', filename)
+    match = re.search(r'_results_(.+)\.csv$', filename)
     if match:
         return match.group(1)
     return 'default'
@@ -105,7 +167,7 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
     
     # Find all experiment result files
     print("Scanning for experiment result files...")
-    result_files = list(results_base.rglob("*_subsampled_results_*.csv"))
+    result_files = list(results_base.rglob("*_results_*.csv"))
     
     if not result_files:
         print("No experiment result files found.")
