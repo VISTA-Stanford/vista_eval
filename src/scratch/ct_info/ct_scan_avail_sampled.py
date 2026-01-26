@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 import sys
 import csv
+import yaml
 
 # Increase the CSV field size limit to handle large clinical text fields
 max_int = sys.maxsize
@@ -13,10 +14,51 @@ while True:
     except OverflowError:
         max_int = int(max_int / 10)
 
-def analyze_subsampled_patients(base_path, output_txt="subsampled_patient_summary.txt"):
+def load_tasks_from_config(config_path):
+    """
+    Load task list from YAML config file.
+    
+    Args:
+        config_path: Path to YAML config file
+    
+    Returns:
+        set: Set of task names
+    """
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            tasks = config.get('tasks', [])
+            return set(tasks)
+    except Exception as e:
+        print(f"Error loading config from {config_path}: {e}")
+        return set()
+
+def analyze_subsampled_patients(base_path, output_txt="subsampled_patient_summary.txt", config_path=None):
     base_dir = Path(base_path)
+    
+    # Load tasks from config if provided
+    valid_tasks = None
+    if config_path:
+        valid_tasks = load_tasks_from_config(config_path)
+        if valid_tasks:
+            print(f"Loaded {len(valid_tasks)} tasks from config: {sorted(valid_tasks)}")
+        else:
+            print(f"Warning: No tasks found in config or error loading config. Processing all subsampled CSVs.")
+    
     # Target only files that HAVE 'subsampled' in the name
-    csv_files = [f for f in base_dir.rglob('*.csv') if 'subsampled' in f.name.lower()]
+    all_csv_files = [f for f in base_dir.rglob('*.csv') if 'subsampled' in f.name.lower()]
+    
+    # Filter by task names if config provided
+    if valid_tasks:
+        csv_files = []
+        for csv_path in all_csv_files:
+            # Extract task name from filename (remove _subsampled suffix)
+            task_name = csv_path.stem.replace('_subsampled', '')
+            if task_name in valid_tasks:
+                csv_files.append(csv_path)
+        print(f"Filtered to {len(csv_files)} CSVs matching tasks from config (out of {len(all_csv_files)} total).")
+    else:
+        csv_files = all_csv_files
     
     per_task_results = []
     global_all_patients = set()
@@ -97,4 +139,5 @@ def analyze_subsampled_patients(base_path, output_txt="subsampled_patient_summar
 
 if __name__ == "__main__":
     VISTA_PATH = '/home/dcunhrya/vista_bench'
-    analyze_subsampled_patients(VISTA_PATH)
+    CONFIG_PATH = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
+    analyze_subsampled_patients(VISTA_PATH, config_path=CONFIG_PATH)

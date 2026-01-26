@@ -1,0 +1,16 @@
+VISTA Bench Subsampled Patient Analysis
+=============================================
+
+Subtask Name                                  | Total Patients  | Labeled Patients
+--------------------------------------------------------------------------------
+died_of_cancer_4_yr_subsampled                | 20              | 20             
+died_of_cancer_5_yr_subsampled                | 20              | 20             
+died_of_cancer_1_yr_subsampled                | 20              | 20             
+died_of_cancer_2_yr_subsampled                | 20              | 20             
+died_of_cancer_3_yr_subsampled                | 20              | 20             
+
+=============================================
+GLOBAL TOTALS (Unique across all subsampled files)
+=============================================
+Total Unique Patients:         49
+Total Unique Labeled Patients: 49

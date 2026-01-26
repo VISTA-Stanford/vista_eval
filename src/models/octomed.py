@@ -29,9 +29,10 @@ class OctoMedAdapter(BaseVLMAdapter):
         if image is not None:
             # Check if image is a list (multiple images)
             if isinstance(image, list):
-                # Add all images from the list
+                # Add all images from the list, filtering out None values
                 for img in image:
-                    content.append({"type": "image", "image": img})
+                    if img is not None:
+                        content.append({"type": "image", "image": img})
             else:
                 # Single image
                 content.append({"type": "image", "image": image})

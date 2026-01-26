@@ -35,9 +35,10 @@ class Qwen3Adapter(BaseVLMAdapter):
         if image is not None:
             # Check if image is a list (multiple images)
             if isinstance(image, list):
-                # Add all images from the list
+                # Add all images from the list, filtering out None values
                 for img in image:
-                    content.append({"type": "image", "image": img})
+                    if img is not None:
+                        content.append({"type": "image", "image": img})
             else:
                 # Single image
                 content.append({"type": "image", "image": image})
@@ -85,23 +86,30 @@ class Qwen3Adapter(BaseVLMAdapter):
             for msgs in messages_batch
         ]
     
-        # Process images only if they exist in the messages
+        # Process images for each message in the batch
+        # Ensure we never pass None - use empty list for items without images
         image_inputs = []
-        has_images = False
+        has_any_images = False
         for msgs in messages_batch:
             try:
                 vision_info = process_vision_info(msgs)
-                if vision_info and len(vision_info) > 0 and vision_info[0] is not None:
-                    image_inputs.append(vision_info[0])
-                    has_images = True
+                # vision_info is a tuple: (image_list, image_sizes) or None
+                if vision_info is not None and isinstance(vision_info, (list, tuple)) and len(vision_info) > 0:
+                    img_list = vision_info[0]
+                    if img_list is not None and len(img_list) > 0:
+                        image_inputs.append(img_list)
+                        has_any_images = True
+                    else:
+                        image_inputs.append([])
                 else:
-                    image_inputs.append(None)
-            except (ValueError, IndexError, AttributeError):
-                # No images in this message
-                image_inputs.append(None)
+                    image_inputs.append([])
+            except (ValueError, IndexError, AttributeError, TypeError):
+                # No images in this message - use empty list instead of None
+                image_inputs.append([])
         
-        # Only pass images parameter if at least one image exists
-        if has_images:
+        # Only pass images parameter if at least one item has images
+        # For text-only batches, don't pass images parameter at all
+        if has_any_images:
             inputs = processor(
                 text=texts,
                 images=image_inputs,
@@ -109,7 +117,7 @@ class Qwen3Adapter(BaseVLMAdapter):
                 return_tensors="pt"
             ).to(model.device)
         else:
-            # Text-only processing
+            # Text-only processing - don't pass images parameter
             inputs = processor(
                 text=texts,
                 padding="longest",

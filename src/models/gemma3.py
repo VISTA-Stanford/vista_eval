@@ -133,19 +133,28 @@ class Gemma3Adapter(BaseVLMAdapter):
         return model, processor
 
     def create_template(self, item):
+        """
+        Create message template following Gemma3 format.
+        Supports multiple images as shown in HuggingFace docs:
+        - Images can be PIL Images or base64-encoded data URIs (data:image/jpeg;base64,...)
+        - Format: instruction text, then all images in sequence, then query text
+        - No slice labels between images (as per user preference)
+        """
         content = []
         # Handle images: text only, one image, or multiple images
         image = item.get("image")
         if image is not None:
             # Check if image is a list (multiple images)
             if isinstance(image, list):
-                # Add all images from the list
+                # Add all images from the list in sequence (no labels between them)
+                # Images can be PIL Images or base64-encoded data URIs
                 for img in image:
-                    content.append({"type": "image", "image": img})
+                    if img is not None:
+                        content.append({"type": "image", "image": img})
             else:
                 # Single image
                 content.append({"type": "image", "image": image})
-        # Always add the text question
+        # Always add the text question at the end
         content.append({"type": "text", "text": item["question"]})
         
         return [
@@ -163,13 +172,91 @@ class Gemma3Adapter(BaseVLMAdapter):
 
     def prepare_inputs(self, messages, processor, model):
         # messages is list[list[dict]] from build_messages()
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt"
-        ).to(model.device)
+        # Workaround for Gemma3 processor bug with multiple images in apply_chat_template
+        # Process each message individually and batch manually to avoid unpacking errors
+        
+        # Process each message separately to handle multiple images correctly
+        all_inputs = []
+        for msg in messages:
+            try:
+                # Try standard processing first
+                single_input = processor.apply_chat_template(
+                    [msg],
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt"
+                )
+                all_inputs.append(single_input)
+            except (ValueError, TypeError) as e:
+                error_msg = str(e)
+                # If we get the unpacking error, process images separately
+                if "too many values to unpack" in error_msg or ("expected" in error_msg.lower() and "unpack" in error_msg.lower()):
+                    # Extract images and text from the message
+                    images = []
+                    text_only_msg = []
+                    for msg_dict in msg:
+                        if msg_dict.get("role") == "user" and isinstance(msg_dict.get("content"), list):
+                            text_items = []
+                            for item in msg_dict["content"]:
+                                if item.get("type") == "image":
+                                    images.append(item["image"])
+                                elif item.get("type") == "text":
+                                    text_items.append(item)
+                            text_only_msg.append({**msg_dict, "content": text_items})
+                        else:
+                            text_only_msg.append(msg_dict)
+                    
+                    # Process text first
+                    text_inputs = processor.apply_chat_template(
+                        [text_only_msg],
+                        add_generation_prompt=True,
+                        tokenize=True,
+                        return_dict=True,
+                        return_tensors="pt"
+                    )
+                    
+                    # Process images using the image processor
+                    # The processor can handle both PIL Images and base64-encoded data URIs
+                    if images:
+                        image_processor = getattr(processor, 'image_processor', processor)
+                        # Process all images for this message
+                        # Images can be PIL Images or base64 strings (data:image/jpeg;base64,...)
+                        image_inputs = image_processor(images, return_tensors="pt")
+                        
+                        # Combine text and image inputs
+                        combined_inputs = {
+                            **text_inputs,
+                            "pixel_values": image_inputs["pixel_values"],
+                        }
+                        if "image_sizes" in image_inputs:
+                            combined_inputs["image_sizes"] = image_inputs["image_sizes"]
+                        all_inputs.append(combined_inputs)
+                    else:
+                        all_inputs.append(text_inputs)
+                else:
+                    # Re-raise if it's a different error
+                    raise
+        
+        # If we have multiple inputs, we need to batch them
+        # This will be handled by stack_inputs in the calling code
+        if len(all_inputs) == 1:
+            inputs = all_inputs[0]
+            # Move to device
+            if isinstance(inputs, dict):
+                inputs = {k: v.to(model.device) if hasattr(v, 'to') else v for k, v in inputs.items()}
+            else:
+                inputs = inputs.to(model.device)
+        else:
+            # Return list of inputs - stack_inputs will handle batching
+            # But we still need to move each to device
+            for i, inp in enumerate(all_inputs):
+                if isinstance(inp, dict):
+                    all_inputs[i] = {k: v.to(model.device) if hasattr(v, 'to') else v for k, v in inp.items()}
+                else:
+                    all_inputs[i] = inp.to(model.device)
+            inputs = all_inputs
+        
         return inputs
 
     def infer(self, model, processor, inputs, max_new_tokens):
@@ -240,11 +327,16 @@ class Gemma3Adapter(BaseVLMAdapter):
         }
 
         # 2. Multimodal Data Stacking (if present)
-        if "pixel_values" in input_list[0]:
+        # Check if ALL items have pixel_values before stacking
+        # Some items may not have pixel_values if images failed to load
+        has_pixel_values = all("pixel_values" in inp for inp in input_list)
+        if has_pixel_values:
             pixel_values = torch.stack([inp["pixel_values"].squeeze(0) for inp in input_list], dim=0)
             batch["pixel_values"] = pixel_values.to(model.device, dtype=torch.bfloat16)
         
-        if "image_sizes" in input_list[0]:
+        # Check if ALL items have image_sizes before stacking
+        has_image_sizes = all("image_sizes" in inp for inp in input_list)
+        if has_image_sizes:
             batch["image_sizes"] = torch.stack([inp["image_sizes"].squeeze(0) for inp in input_list], dim=0).to(model.device)
 
         return batch

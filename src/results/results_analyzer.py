@@ -4,6 +4,171 @@ import re
 import pandas as pd
 from pathlib import Path
 
+
+def _clean_extracted_answer(answer):
+    """Cleans an extracted answer: strip, normalize whitespace, remove wrapping quotes and common prefixes/suffixes."""
+    if not answer or not str(answer).strip():
+        return ""
+    answer = str(answer).strip()
+    if (answer.startswith('"') and answer.endswith('"')) or (answer.startswith("'") and answer.endswith("'")):
+        answer = answer[1:-1].strip()
+    prefixes = [
+        r'^answer:\s*', r'^response:\s*', r'^the answer is\s*', r'^answer is\s*',
+        r'^the response is\s*', r'^response is\s*',
+    ]
+    for p in prefixes:
+        answer = re.sub(p, '', answer, flags=re.IGNORECASE).strip()
+    answer = re.sub(r'\s+', ' ', answer)
+    answer = re.sub(r'\n+', ' ', answer)
+    answer = re.sub(r'\s*\[TRUNCATED.*?\]\s*$', '', answer, flags=re.IGNORECASE).strip()
+    answer = re.sub(r'\s*\[.*?truncated.*?\]\s*$', '', answer, flags=re.IGNORECASE).strip()
+    return answer.strip()
+
+
+def _extract_boxed(text):
+    """Extract all \\boxed{...} contents, handling nested braces."""
+    out = []
+    s = str(text)
+    i = 0
+    needle = '\\boxed{'
+    while True:
+        start = s.find(needle, i)
+        if start == -1:
+            break
+        start += len(needle)
+        depth = 1
+        j = start
+        while j < len(s) and depth > 0:
+            if s[j] == '{':
+                depth += 1
+            elif s[j] == '}':
+                depth -= 1
+            j += 1
+        if depth == 0:
+            out.append(s[start : j - 1].strip())
+        i = j
+    return out
+
+
+def _extract_answer_candidates(text):
+    """
+    Extract all possible answer strings from the model's raw output.
+    Used for correctness checking: we consider the model correct if *any* candidate matches.
+    - Checks \\boxed{...}, <answer>...</answer>, <label>...</label>, angle brackets <Yes> or <"Yes">.
+    - Splits on '|' and checks each segment (tags/boxed/angle brackets + raw trimmed segment).
+    - If no '|', adds last word and last phrase (last 2–3 words) as fallbacks.
+    """
+    if pd.isna(text) or not str(text).strip():
+        return []
+    text = str(text).strip()
+    candidates = []
+    seen = set()
+
+    def add(raw):
+        c = _clean_extracted_answer(raw)
+        if not c:
+            return
+        k = c.lower()
+        if k not in seen:
+            seen.add(k)
+            candidates.append(c)
+
+    def collect_from(s):
+        for boxed in _extract_boxed(s):
+            add(boxed)
+        for m in re.finditer(r'<answer>(.*?)</answer>', s, re.DOTALL | re.IGNORECASE):
+            add(m.group(1))
+        for m in re.finditer(r'<label>(.*?)</label>', s, re.DOTALL | re.IGNORECASE):
+            add(m.group(1))
+        # Extract content from angle brackets like <Yes> or <"Yes"> (but not <answer>/<label> tags)
+        # Pattern: < followed by optional quote, content, optional quote, >
+        # Handles: <Yes>, <"Yes">, <'Yes'>, <Yes, No>
+        for m in re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', s):
+            content = m.group(2).strip()
+            # Skip if it looks like an XML tag (contains / or is a known tag name)
+            if content and not content.startswith('/') and content.lower() not in ['answer', 'label']:
+                add(content)
+
+    collect_from(text)
+
+    if '|' in text:
+        for part in text.split('|'):
+            part = part.strip()
+            if not part:
+                continue
+            collect_from(part)
+            add(part)
+    else:
+        words = text.split()
+        if words:
+            add(words[-1])
+        if len(words) >= 2:
+            add(' '.join(words[-2:]))
+        if len(words) >= 3:
+            add(' '.join(words[-3:]))
+        if text:
+            add(text)
+
+    return candidates
+
+
+def _extract_answer(text):
+    """
+    Extract the primary answer from the model's raw output (for display / cleaned_response).
+    Priority: \\boxed{} > <answer> > <label> > angle brackets <Yes> or <"Yes"> > pipe last segment > last word/phrase > full text.
+    """
+    if pd.isna(text) or not str(text).strip():
+        return ""
+    text = str(text).strip()
+    boxed = _extract_boxed(text)
+    if boxed:
+        return _clean_extracted_answer(boxed[-1])
+    m = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return _clean_extracted_answer(m.group(1))
+    m = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return _clean_extracted_answer(m.group(1))
+    # Check for angle brackets anywhere in text (e.g., <Yes> or <"Yes">)
+    angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', text)
+    if angle_match:
+        content = angle_match.group(2).strip()
+        if content and content.lower() not in ['answer', 'label']:
+            return _clean_extracted_answer(content)
+    
+    if '|' in text:
+        parts = [p.strip() for p in text.split('|') if p.strip()]
+        if parts:
+            last_part = parts[-1]
+            # Check for angle brackets in the last part (e.g., | <Yes> or | <"Yes">)
+            angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', last_part)
+            if angle_match:
+                content = angle_match.group(2).strip()
+                if content and content.lower() not in ['answer', 'label']:
+                    return _clean_extracted_answer(content)
+            return _clean_extracted_answer(last_part)
+    words = text.split()
+    if words:
+        return _clean_extracted_answer(words[-1])
+    return _clean_extracted_answer(text)
+
+
+def is_answer_correct(model_response, mapped_label):
+    """
+    True if any extracted answer candidate matches the gold mapped_label (case-insensitive).
+    Handles |-splits, \\boxed{}, <answer>/<label>, and last word/phrase fallbacks.
+    """
+    if pd.isna(mapped_label) or mapped_label is None:
+        return False
+    target = str(mapped_label).strip().lower()
+    if not target:
+        return False
+    for c in _extract_answer_candidates(model_response):
+        if str(c).strip().lower() == target:
+            return True
+    return False
+
+
 class DynamicResultsAnalyzer:
     def __init__(self, base_path='/home/dcunhrya/vista_bench', 
                  results_path='/home/dcunhrya/results'):
@@ -17,25 +182,6 @@ class DynamicResultsAnalyzer:
         with open(tasks_json, 'r') as f:
             tasks_list = json.load(f)
             self.task_registry = {t['task_name']: t for t in tasks_list}
-
-    def _extract_answer(self, text):
-        """
-        Extracts the core answer from the model's raw output.
-        Prioritizes <answer> tags, then Pipe |, then fallback.
-        """
-        text = str(text).strip()
-        
-        # 1. Regex for <answer> tags (case-insensitive, handles newlines)
-        tag_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
-        if tag_match:
-            return tag_match.group(1).strip()
-        
-        # 2. Fallback to everything after the Pipe delimiter
-        if '|' in text:
-            return text.split('|')[-1].strip()
-        
-        # 3. Final fallback: Cleaned version of original text
-        return text
 
     def _clean_question(self, text):
         """
@@ -79,16 +225,15 @@ class DynamicResultsAnalyzer:
             # 1. Filter Question: Remove everything from 'OPTIONS' onwards
             df['question'] = df['question'].apply(self._clean_question)
 
-            # 2. Extract Response: Handle <answer> tags or Pipe |
-            df['cleaned_response'] = df['model_response'].apply(self._extract_answer)
+            # 2. Extract Response: Handle \\boxed{}, <answer>/<label>, pipe |, last word/phrase
+            df['cleaned_response'] = df['model_response'].apply(_extract_answer)
 
             # 3. Map Label: Numeric key -> String label
             df['mapped_label'] = df['label'].astype(str).map(mapping)
 
-            # 4. Accuracy Check: Case-insensitive comparison
+            # 4. Accuracy Check: any extracted candidate matches mapped_label
             df['is_correct'] = df.apply(
-                lambda x: str(x['cleaned_response']).strip().lower() == str(x['mapped_label']).strip().lower() 
-                if pd.notna(x['mapped_label']) else False, 
+                lambda x: is_answer_correct(x['model_response'], x['mapped_label']),
                 axis=1
             )
 

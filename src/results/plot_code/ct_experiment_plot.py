@@ -4,103 +4,9 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from pathlib import Path
-from results.results_analyzer import DynamicResultsAnalyzer
 
-def _extract_answer(text):
-    """
-    Extracts the core answer from the model's raw output.
-    Prioritizes <answer> tags, then <label> tags, then double quotes, then Pipe |, then fallback.
-    Handles quotes, extra formatting, and various edge cases.
-    """
-    if pd.isna(text):
-        return ""
-    
-    text = str(text).strip()
-    
-    if not text:
-        return ""
-    
-    # 1. Regex for <answer> tags (case-insensitive, handles newlines)
-    tag_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
-    if tag_match:
-        answer = tag_match.group(1).strip()
-        return _clean_extracted_answer(answer)
-    
-    # 2. Regex for <label> tags (case-insensitive, handles newlines)
-    label_match = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
-    if label_match:
-        answer = label_match.group(1).strip()
-        return _clean_extracted_answer(answer)
-    
-    # 3. Extract content between double quotes (handles cases like "Yes" or "No")
-    # Look for content between double quotes that might be the answer
-    double_quote_match = re.search(r'"([^"]+)"', text)
-    if double_quote_match:
-        answer = double_quote_match.group(1).strip()
-        # Only use this if it looks like a reasonable answer (not too long, not just whitespace)
-        if answer and len(answer) < 200:  # Reasonable answer length
-            return _clean_extracted_answer(answer)
-    
-    # 4. Fallback to everything after the Pipe delimiter
-    if '|' in text:
-        # Split by | and take the last part (most likely to be the answer)
-        parts = text.split('|')
-        answer = parts[-1].strip()
-        
-        # If there are multiple parts, also check the second-to-last in case
-        # the last part is empty or just whitespace
-        if not answer and len(parts) > 1:
-            answer = parts[-2].strip()
-        
-        return _clean_extracted_answer(answer)
-    
-    # 5. Final fallback: Cleaned version of original text
-    return _clean_extracted_answer(text)
+from results.results_analyzer import _extract_answer, is_answer_correct
 
-def _clean_extracted_answer(answer):
-    """
-    Cleans the extracted answer by removing quotes, extra whitespace, and formatting artifacts.
-    """
-    if not answer:
-        return ""
-    
-    # Remove leading/trailing whitespace and newlines
-    answer = answer.strip()
-    
-    # Remove quotes (both single and double) if they wrap the entire answer
-    # Handle cases like: "Yes" or 'No' or "Yes, the patient..."
-    if (answer.startswith('"') and answer.endswith('"')) or \
-       (answer.startswith("'") and answer.endswith("'")):
-        answer = answer[1:-1].strip()
-    
-    # Remove common prefixes that might appear
-    prefixes_to_remove = [
-        r'^answer:\s*',
-        r'^response:\s*',
-        r'^the answer is\s*',
-        r'^answer is\s*',
-        r'^the response is\s*',
-        r'^response is\s*',
-    ]
-    for prefix in prefixes_to_remove:
-        answer = re.sub(prefix, '', answer, flags=re.IGNORECASE)
-        answer = answer.strip()
-    
-    # Remove extra whitespace and normalize newlines
-    answer = re.sub(r'\s+', ' ', answer)  # Replace multiple whitespace with single space
-    answer = re.sub(r'\n+', ' ', answer)  # Replace newlines with space
-    
-    # Remove common suffixes that might be artifacts (be conservative)
-    # Only remove if they look like metadata, not part of the actual answer
-    suffixes_to_remove = [
-        r'\s*\[TRUNCATED.*?\]\s*$',  # Remove trailing [TRUNCATED...]
-        r'\s*\[.*?truncated.*?\]\s*$',  # Remove trailing [something truncated]
-    ]
-    for suffix in suffixes_to_remove:
-        answer = re.sub(suffix, '', answer, flags=re.IGNORECASE)
-        answer = answer.strip()
-    
-    return answer.strip()
 
 def _clean_question(text):
     """
@@ -123,6 +29,21 @@ def extract_experiment_from_filename(filename):
         return match.group(1)
     return 'default'
 
+def get_task_csv_filename(task_name, use_subsampled=False):
+    """
+    Get the correct CSV filename for a task based on subsample flag.
+    
+    Args:
+        task_name: Name of the task
+        use_subsampled: If True, return _subsampled.csv filename, else .csv
+    
+    Returns:
+        str: CSV filename (e.g., 'task_name.csv' or 'task_name_subsampled.csv')
+    """
+    if use_subsampled:
+        return f"{task_name}_subsampled.csv"
+    return f"{task_name}.csv"
+
 def calculate_accuracy(df, mapping):
     """
     Calculate accuracy for a dataframe using the same logic as results_analyzer.
@@ -135,17 +56,16 @@ def calculate_accuracy(df, mapping):
             print("  Warning: 'model_response' column not found")
             return None
         
-        # Extract response
+        # Extract response (primary answer for display)
         df['cleaned_response'] = df['model_response'].apply(_extract_answer)
         
         # Map label if mapping and label column exist
         if mapping and 'label' in df.columns:
             df['mapped_label'] = df['label'].astype(str).map(mapping)
             
-            # Calculate accuracy
+            # Accuracy: any candidate (| splits, \boxed{}, <answer>/<label>, last word/phrase) matches
             df['is_correct'] = df.apply(
-                lambda x: str(x['cleaned_response']).strip().lower() == str(x['mapped_label']).strip().lower() 
-                if pd.notna(x['mapped_label']) else False, 
+                lambda x: is_answer_correct(x['model_response'], x['mapped_label']),
                 axis=1
             )
             
@@ -160,16 +80,71 @@ def calculate_accuracy(df, mapping):
         traceback.print_exc()
         return None
 
-def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', base_path='/home/dcunhrya/vista_bench'):
+def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', base_path='/home/dcunhrya/vista_bench', config_path=None):
     """
     Generate comparison plots for experiments across models for each task.
     
     Args:
         results_path: Base path to search for result CSV files
         base_path: Base path to load task registry for mappings
+        config_path: Optional path to YAML config file to check for subsample flag and filter tasks/models
     """
     results_base = Path(results_path)
     base_path_obj = Path(base_path)
+    
+    # Load config
+    config = None
+    use_subsampled = False
+    valid_tasks = None
+    valid_models = None
+    valid_experiments = None
+    
+    if config_path is None:
+        config_path = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
+    
+    if config_path:
+        try:
+            import yaml
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                use_subsampled = config.get('subsample', False)
+                
+                # Extract valid tasks from config
+                tasks_list = config.get('tasks', [])
+                if tasks_list:
+                    valid_tasks = set(tasks_list)
+                    print(f"Loaded {len(valid_tasks)} tasks from config: {sorted(valid_tasks)}")
+                
+                # Extract valid models from config
+                models_list = config.get('models', [])
+                if models_list:
+                    # Convert model names to file format (matching run_bq.py logic)
+                    valid_models = set()
+                    for model in models_list:
+                        if isinstance(model, dict) and 'name' in model:
+                            model_name = model['name']
+                            # Match run_bq.py: model_name.split('/')[-1].replace('/', '_')
+                            # This takes the last part after splitting by '/'
+                            file_model_name = model_name.split('/')[-1].replace('/', '_')
+                            valid_models.add(file_model_name)
+                            # Also try the full name with slashes replaced (in case it's stored differently)
+                            valid_models.add(model_name.replace('/', '_'))
+                            # Also try just the last part without any replacement (fallback)
+                            if '/' in model_name:
+                                valid_models.add(model_name.split('/')[-1])
+                    if valid_models:
+                        print(f"Loaded {len(valid_models)} model patterns from config: {sorted(valid_models)}")
+                
+                # Extract valid experiments from config
+                experiments_list = config.get('experiments', [])
+                if experiments_list:
+                    valid_experiments = set(experiments_list)
+                    print(f"Loaded {len(valid_experiments)} experiments from config: {sorted(valid_experiments)}")
+        except Exception as e:
+            print(f"Warning: Could not load config from {config_path}: {e}")
+    
+    if use_subsampled:
+        print("Note: Using subsampled CSV files (subsample flag is true)")
     
     # Load task registry for mappings
     tasks_json = base_path_obj / 'tasks' / 'valid_tasks.json'
@@ -182,13 +157,61 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
     
     # Find all experiment result files
     print("Scanning for experiment result files...")
-    result_files = list(results_base.rglob("*_results_*.csv"))
+    all_result_files = list(results_base.rglob("*_results_*.csv"))
+    
+    # Filter by tasks, models, and experiments from config
+    result_files = []
+    if valid_tasks or valid_models or valid_experiments:
+        for file_path in all_result_files:
+            # Extract path components: results / source_folder / task_name / model_name / file
+            relative_parts = file_path.relative_to(results_base).parts
+            
+            if len(relative_parts) < 4:
+                continue
+            
+            task_name = relative_parts[1]
+            model_name = relative_parts[2]
+            filename = relative_parts[3]
+            
+            # Extract experiment name from filename
+            experiment = extract_experiment_from_filename(filename)
+            
+            # Check if task matches config
+            if valid_tasks and task_name not in valid_tasks:
+                continue
+            
+            # Check if model matches config
+            if valid_models:
+                model_matches = False
+                # First try exact match
+                if model_name in valid_models:
+                    model_matches = True
+                else:
+                    # Also check if model_name ends with any of the valid patterns
+                    # (for cases where full path is stored like "OpenGVLab_InternVL3_5-8B")
+                    for valid_model in valid_models:
+                        # Check if model_name ends with the valid_model (with or without separator)
+                        if model_name == valid_model or model_name.endswith('_' + valid_model) or model_name.endswith('/' + valid_model):
+                            model_matches = True
+                            break
+                
+                if not model_matches:
+                    continue
+            
+            # Check if experiment matches config
+            if valid_experiments and experiment not in valid_experiments:
+                continue
+            
+            result_files.append(file_path)
+        
+        print(f"Filtered to {len(result_files)} files matching config (out of {len(all_result_files)} total).")
+    else:
+        result_files = all_result_files
+        print(f"Found {len(result_files)} experiment result file(s) (no filtering applied)")
     
     if not result_files:
-        print("No experiment result files found.")
+        print("No experiment result files found matching config criteria.")
         return
-    
-    print(f"Found {len(result_files)} experiment result file(s)")
     
     # Organize data by (source, task, model, experiment)
     data_dict = {}
@@ -236,7 +259,7 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
                     'Experiment': experiment,
                     'Accuracy': accuracy
                 })
-                print(f"  ✓ {task_name} | {model_name} | {experiment}: {accuracy:.2f}%")
+                # print(f"  ✓ {task_name} | {model_name} | {experiment}: {accuracy:.2f}%")
             else:
                 print(f"  ✗ Skipping {file_path.name}: Could not calculate accuracy")
         except Exception as e:
@@ -289,19 +312,20 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
         plt.xticks(rotation=45, ha='right')
         
         # Add value labels on top of bars
-        for container in plot.containers:
-            plot.bar_label(container, fmt='%.1f', label_type='edge', padding=3)
+        # for container in plot.containers:
+        #     plot.bar_label(container, fmt='%.1f', label_type='edge', padding=3)
         
         plt.tight_layout()
         
-        # Save plot
-        save_dir = Path('/home/dcunhrya/vista_eval/figures/experiment_comparisons')
+        # Save plot - organize by source_folder (overall task name) in figures directory
+        # Structure: figures/{source_folder}/{task_name}_experiment_comparison.pdf
+        base_figures_dir = Path('/home/dcunhrya/vista_eval/figures')
+        save_dir = base_figures_dir / source_folder
         save_dir.mkdir(parents=True, exist_ok=True)
         
-        # Sanitize filename
+        # Sanitize filename (only task_name, not source_folder since it's in the path)
         safe_task_name = task_name.replace('/', '_').replace(' ', '_')
-        safe_source = source_folder.replace('/', '_').replace(' ', '_')
-        save_path = save_dir / f"{safe_source}_{safe_task_name}_experiment_comparison.pdf"
+        save_path = save_dir / f"{safe_task_name}_experiment_comparison.pdf"
         
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"  Plot saved: {save_path}")
@@ -319,4 +343,6 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
         print()
 
 if __name__ == "__main__":
-    generate_experiment_comparison_plots()
+    # Default config path
+    default_config = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
+    generate_experiment_comparison_plots(config_path=default_config)

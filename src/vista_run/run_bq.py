@@ -190,7 +190,7 @@ class TaskOrchestrator:
             # Get safety max_chars limit to prevent token overflow
             # Rough estimate: 1 token ≈ 4 characters, but can vary
             # Model max is 14588 tokens, so we use ~30000 chars to be safe (allows for prompt overhead)
-            safety_max_chars = truncation_config.get('max_chars', 30000)
+            safety_max_chars = truncation_config.get('max_chars', 40000)
             
             # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
             # Find all event start positions and extract dates
@@ -360,7 +360,13 @@ class TaskOrchestrator:
 
         # --- LOAD PATIENT TIMELINES FROM LOCAL CSV ---
         # Load local CSV file (same logic as run.py)
-        csv_path = self.base_path / source_csv / f"{task_name}.csv"
+        # Check if subsample flag is set to use _subsampled.csv files
+        use_subsampled = self.cfg.get('subsample', False)
+        if use_subsampled:
+            csv_filename = f"{task_name}_subsampled.csv"
+        else:
+            csv_filename = f"{task_name}.csv"
+        csv_path = self.base_path / source_csv / csv_filename
         print(f"    Loading patient timelines from local CSV: {csv_path}")
         
         if not csv_path.exists():
@@ -491,7 +497,7 @@ class TaskOrchestrator:
                 batch_counter += 1
 
                 # Flush to disk every 20 batches
-                if batch_counter % 20 == 0:
+                if batch_counter % 10 == 0:
                     self._append_to_csv(out_file, results_buffer)
                     results_buffer = [] 
 
