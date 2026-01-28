@@ -153,6 +153,36 @@ def _extract_answer(text):
     return _clean_extracted_answer(text)
 
 
+def _normalize_label_for_mapping(label):
+    """
+    Convert label (int, float, or str) to the string key used in valid_tasks.json mapping.
+    Mapping keys are always strings like "0", "1", "-1". Labels from CSVs can be ints or
+    floats (e.g. 1.0); we normalize so 1.0 -> "1", 0.0 -> "0" for correct lookup.
+    """
+    if pd.isna(label) or label is None:
+        return None
+    try:
+        f = float(label)
+        if f == int(f):
+            return str(int(f))
+        return str(f)
+    except (TypeError, ValueError):
+        return str(label)
+
+
+def map_label_to_answer(label, mapping):
+    """
+    Map a label (int/float/str) to the correct answer string using the task mapping.
+    Uses _normalize_label_for_mapping so 1.0 -> "1", 0 -> "0" etc. match mapping keys.
+    """
+    if not mapping:
+        return label
+    key = _normalize_label_for_mapping(label)
+    if key is None:
+        return None
+    return mapping.get(key, label)
+
+
 def is_answer_correct(model_response, mapped_label):
     """
     True if any extracted answer candidate matches the gold mapped_label (case-insensitive).
@@ -228,8 +258,8 @@ class DynamicResultsAnalyzer:
             # 2. Extract Response: Handle \\boxed{}, <answer>/<label>, pipe |, last word/phrase
             df['cleaned_response'] = df['model_response'].apply(_extract_answer)
 
-            # 3. Map Label: Numeric key -> String label
-            df['mapped_label'] = df['label'].astype(str).map(mapping)
+            # 3. Map Label: Numeric key -> String label (handles int/float labels vs string mapping keys)
+            df['mapped_label'] = df['label'].apply(lambda lbl: map_label_to_answer(lbl, mapping))
 
             # 4. Accuracy Check: any extracted candidate matches mapped_label
             df['is_correct'] = df.apply(

@@ -13,20 +13,23 @@ runtime:
   max_new_tokens: 1024
 
 models:
-  - type: "intern"
-    name: "OpenGVLab/InternVL3_5-8B"
+  # - type: "intern"
+  #   name: "OpenGVLab/InternVL3_5-8B"
+
+  - type: "medvlm"
+    name: 'JZPeterPan/MedVLM-R1'  
   
-  - type: "gemma3"
-    name: "google/medgemma-1.5-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-1.5-4b-it"
 
-  - type: "gemma3"
-    name: "google/medgemma-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-4b-it"
 
-  - type: "octomed"
-    name: "OctoMed/OctoMed-7B"
+  # - type: "octomed"
+  #   name: "OctoMed/OctoMed-7B"
 
-  - type: "qwen3vl"
-    name: "Qwen/Qwen3-VL-8B-Instruct"
+  # - type: "qwen3vl"
+  #   name: "Qwen/Qwen3-VL-8B-Instruct"
 
 tasks:
   - radiation_oligoprogression_answer
@@ -34,18 +37,24 @@ tasks:
   - progression_assessment_discussed
   - pneumonitis_infection_discussed
   - pneumonitis_infection_answer
-  # - died_of_cancer_1_yr
-  # - died_of_cancer_2_yr
-  # - died_of_cancer_3_yr
-  # - died_of_cancer_4_yr
-  # - died_of_cancer_5_yr
+  - died_of_cancer_1_yr
+  - died_of_cancer_2_yr
+  - died_of_cancer_3_yr
+  - died_of_cancer_4_yr
+  - died_of_cancer_5_yr
+  - has_recurrence_1_yr
+  - has_recurrence_2_yr
+  - has_recurrence_3_yr
+  - has_recurrence_4_yr
+  - has_recurrence_5_yr
 
 experiments:
   - no_image
   - axial_1_image
   - all_image
   - axial_all_image
-  - sagittal_all_image
+  # - sagittal_all_image
+  - no_timeline
 
 # Timeline truncation configuration
 # Choose one of two modes:

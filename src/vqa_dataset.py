@@ -6,17 +6,35 @@ from torch.utils.data import Dataset
 from pathlib import Path
 import io
 import tempfile
-from vista_run.utils.utils_inference import pad_to_512, normalize_slice
+from vista_run.utils.utils_inference import pad_to_512, pad_to_size, normalize_slice
+
+def norm(ct_vol: np.ndarray, min_val: float, max_val: float) -> np.ndarray:
+    """Window and normalize CT imaging Houndsfield values to values 0 - 255."""
+    ct_vol = np.clip(ct_vol, min_val, max_val)  # Clip the imaging value range
+    ct_vol = ct_vol.astype(np.float32)
+    ct_vol -= min_val
+    ct_vol /= (max_val - min_val)  # Norm to values between 0 - 1.0
+    ct_vol *= 255.0  # Norm to values been 0 - 255.0
+    return ct_vol
+
+def window(ct_vol: np.ndarray) -> np.ndarray:
+    """Window CT slice imaging with three windows (wide, mediastinum(chest), brain).
+    Imaging will appear color when visualized, RGB channels contain different
+    representations of the data.
+    """
+    window_clips = [(-1024, 1024), (-135, 215), (0, 80)]
+    return np.stack([norm(ct_vol, clip[0], clip[1]) for clip in window_clips], axis=-1)
 
 class PromptDataset(Dataset):
-    def __init__(self, df, prompt_col='dynamic_prompt', add_options=False, experiment='axial_1_image', storage_client=None):
+    def __init__(self, df, prompt_col='dynamic_prompt', add_options=False, experiment='axial_1_image', storage_client=None, model_type=None):
         """
         Args:
             df: Dataframe containing the data.
             prompt_col: The column name to use for the text prompt.
             add_options: Whether to append options to the prompt.
-            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', or 'axial_all_image'
+            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', or 'no_timeline'
             storage_client: GCP Storage client for loading NIfTI files from bucket
+            model_type: Model type string (e.g., 'gemma3') to determine preprocessing
         """
         self.df = df.reset_index(drop=True)
         self.prompt_col = prompt_col
@@ -24,6 +42,36 @@ class PromptDataset(Dataset):
         self.experiment = experiment
         self.storage_client = storage_client
         self.bucket_name = 'su-vista-uscentral1'
+        self.model_type = model_type
+        self.is_gemma = model_type is not None and 'gemma' in model_type.lower()
+        
+        # Determine image size based on model type
+        self.target_size = 448 if self.is_gemma else 512
+    
+    def _process_ct_slice(self, ct_slice):
+        """
+        Process a CT slice: apply windowing for gemma models, normalize, convert to PIL Image, and resize.
+        
+        Args:
+            ct_slice: numpy array of CT slice data
+            
+        Returns:
+            PIL Image object
+        """
+        if self.is_gemma:
+            # Apply windowing function for gemma models
+            windowed_slice = window(ct_slice)
+            # Round slice voxels to nearest integer number
+            windowed_slice = np.round(windowed_slice, 0).astype(np.uint8)
+            # Convert to PIL Image (RGB mode since windowing creates 3 channels)
+            pil_img = Image.fromarray(windowed_slice, mode='RGB')
+        else:
+            # Standard normalization for non-gemma models
+            normalized_slice = normalize_slice(ct_slice)
+            pil_img = Image.fromarray(normalized_slice, mode='L')
+        
+        # Resize to target size (448 for gemma, 512 for others)
+        return pad_to_size(pil_img, self.target_size)
 
     def __len__(self):
         return len(self.df)
@@ -50,7 +98,7 @@ class PromptDataset(Dataset):
                 try:
                     with Image.open(image_path) as PIL_img:
                         PIL_img.load()
-                        img = pad_to_512(PIL_img.copy())
+                        img = pad_to_size(PIL_img.copy(), self.target_size)
                     print(f"[IMAGE] Using image from image_path: {image_path} (index: {row.get('index', idx)})")
                 except Exception as e:
                     print(f"Error loading image at {image_path}: {e}")
@@ -95,9 +143,7 @@ class PromptDataset(Dataset):
                             # Extract axial middle slice (3rd dimension)
                             axial_middle_index = img_data.shape[2] // 2
                             axial_slice = img_data[:, :, axial_middle_index]
-                            axial_slice = normalize_slice(axial_slice)
-                            img = Image.fromarray(axial_slice, mode='L')
-                            img = pad_to_512(img)
+                            img = self._process_ct_slice(axial_slice)
                             # print(f"[IMAGE] Using NIfTI axial_1_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
                             
                         elif self.experiment == 'all_image':
@@ -107,20 +153,17 @@ class PromptDataset(Dataset):
                             if len(img_data.shape) > 0:
                                 sagittal_middle = img_data.shape[0] // 2
                                 sagittal_slice = img_data[sagittal_middle, :, :]
-                                sagittal_slice = normalize_slice(sagittal_slice)
-                                img_list.append(pad_to_512(Image.fromarray(sagittal_slice, mode='L')))
+                                img_list.append(self._process_ct_slice(sagittal_slice))
                             # Dimension 1 (coronal)
                             if len(img_data.shape) > 1:
                                 coronal_middle = img_data.shape[1] // 2
                                 coronal_slice = img_data[:, coronal_middle, :]
-                                coronal_slice = normalize_slice(coronal_slice)
-                                img_list.append(pad_to_512(Image.fromarray(coronal_slice, mode='L')))
+                                img_list.append(self._process_ct_slice(coronal_slice))
                             # Dimension 2 (axial)
                             if len(img_data.shape) > 2:
                                 axial_middle = img_data.shape[2] // 2
                                 axial_slice = img_data[:, :, axial_middle]
-                                axial_slice = normalize_slice(axial_slice)
-                                img_list.append(pad_to_512(Image.fromarray(axial_slice, mode='L')))
+                                img_list.append(self._process_ct_slice(axial_slice))
                             img = img_list if img_list else None
                             # print(f"[IMAGE] Using NIfTI all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
                             
@@ -137,8 +180,7 @@ class PromptDataset(Dataset):
                                     if index >= depth:
                                         index = depth - 1
                                     axial_slice = img_data[:, :, index]
-                                    axial_slice = normalize_slice(axial_slice)
-                                    img_list.append(pad_to_512(Image.fromarray(axial_slice, mode='L')))
+                                    img_list.append(self._process_ct_slice(axial_slice))
                                 img = img_list
                                 # print(f"[IMAGE] Using NIfTI axial_all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
                             else:
@@ -157,10 +199,32 @@ class PromptDataset(Dataset):
                                     if index >= width:
                                         index = width - 1
                                     sagittal_slice = img_data[index, :, :]
-                                    sagittal_slice = normalize_slice(sagittal_slice)
-                                    img_list.append(pad_to_512(Image.fromarray(sagittal_slice, mode='L')))
+                                    img_list.append(self._process_ct_slice(sagittal_slice))
                                 img = img_list
                                 # print(f"[IMAGE] Using NIfTI sagittal_all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
+                            else:
+                                img = None
+                                
+                        elif self.experiment == 'no_timeline':
+                            # Extract 50 evenly spaced axial slices (3rd dimension)
+                            # This experiment is for when no patient timeline is provided
+                            if len(img_data.shape) > 2:
+                                depth = img_data.shape[2]
+                                img_list = []
+                                num_slices = 100
+                                for i in range(num_slices):
+                                    # Calculate position: 0.0, 1/(num_slices-1), 2/(num_slices-1), ..., 1.0
+                                    if num_slices > 1:
+                                        position = i / (num_slices - 1)
+                                    else:
+                                        position = 0.0
+                                    index = int(position * (depth - 1))
+                                    if index >= depth:
+                                        index = depth - 1
+                                    axial_slice = img_data[:, :, index]
+                                    img_list.append(self._process_ct_slice(axial_slice))
+                                img = img_list
+                                # print(f"[IMAGE] Using NIfTI no_timeline (50 slices) from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
                             else:
                                 img = None
                     except Exception as e:

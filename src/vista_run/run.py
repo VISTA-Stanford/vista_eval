@@ -186,13 +186,50 @@ class TaskOrchestrator:
 
             try:
                 if 'gemma' in self.model_type:
-                    all_inputs = []
+                    # Check if any items have multiple images - if so, process them individually
+                    has_multiple_images = False
                     for item in new_items:
-                        single_msg = self.adapter.create_template(item)
-                        single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
-                        all_inputs.append(single_inp)
-                    batched_inputs = self.adapter.stack_inputs(all_inputs, self.model)
-                    outputs = self.adapter.infer(self.model, self.processor, batched_inputs, self.cfg['runtime']["max_new_tokens"])
+                        image = item.get('image', None)
+                        if image is not None:
+                            if isinstance(image, list) and len(image) > 1:
+                                has_multiple_images = True
+                                break
+                    
+                    if has_multiple_images:
+                        # Process items with multiple images one at a time
+                        outputs = []
+                        for item in new_items:
+                            try:
+                                # Validate item is a dict
+                                if not isinstance(item, dict):
+                                    raise TypeError(f"Expected item to be a dict, got {type(item)}")
+                                
+                                single_msg = self.adapter.create_template(item)
+                                single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
+                                
+                                # Validate prepare_inputs returned a dict
+                                if not isinstance(single_inp, dict):
+                                    raise TypeError(f"Expected prepare_inputs to return a dict for single item, got {type(single_inp)}")
+                                
+                                single_output = self.adapter.infer(self.model, self.processor, single_inp, self.cfg['runtime']["max_new_tokens"])
+                                # Ensure single_output is a list
+                                if isinstance(single_output, list):
+                                    outputs.extend(single_output)
+                                else:
+                                    outputs.append(single_output)
+                            except Exception as e:
+                                print(f"Error processing item individually: {e}")
+                                # Add empty string as placeholder to maintain alignment
+                                outputs.append("")
+                    else:
+                        # No multiple images, batch normally
+                        all_inputs = []
+                        for item in new_items:
+                            single_msg = self.adapter.create_template(item)
+                            single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
+                            all_inputs.append(single_inp)
+                        batched_inputs = self.adapter.stack_inputs(all_inputs, self.model)
+                        outputs = self.adapter.infer(self.model, self.processor, batched_inputs, self.cfg['runtime']["max_new_tokens"])
                 else:
                     messages = [self.adapter.create_template(item) for item in new_items]
                     inputs = self.adapter.prepare_inputs(messages, self.processor, self.model)

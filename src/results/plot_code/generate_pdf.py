@@ -10,7 +10,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 
-from results.results_analyzer import is_answer_correct
+from results.results_analyzer import is_answer_correct, map_label_to_answer
 
 
 def extract_experiment_from_filename(filename):
@@ -150,7 +150,7 @@ def generate_questions_pdf(results_path='/home/dcunhrya/results',
                 # Calculate is_correct if not present (checks all candidates: | splits, \boxed{}, <answer>/<label>, last word/phrase)
                 mapping = get_task_mapping(base_path_obj, task_name)
                 label = first_row.get('label', 'N/A')
-                mapped_label = mapping.get(str(label), label) if mapping else label
+                mapped_label = map_label_to_answer(label, mapping)
                 model_response = str(first_row.get('model_response', ''))
                 is_correct = is_answer_correct(model_response, mapped_label)
             else:
@@ -231,7 +231,7 @@ def generate_questions_pdf(results_path='/home/dcunhrya/results',
             # Get mapping for this task
             mapping = task_mappings.get(task_name, {})
             label = first_data.get('label', 'N/A')
-            mapped_label = mapping.get(str(label), label) if mapping else label
+            mapped_label = map_label_to_answer(label, mapping)
             
             # Print question and correct answer
             q_text = first_data.get('question', 'N/A').replace('<', '&lt;').replace('>', '&gt;')

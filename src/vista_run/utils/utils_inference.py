@@ -8,12 +8,17 @@ def pad_to_512(img):
     """
     Resizes image if > 512, then pads to 512x512 with right/bottom padding.
     """
-    w, h = img.size
-    size = 512
+    return pad_to_size(img, 512)
 
-    # --- New Logic: Resize if larger than 512 ---
+def pad_to_size(img, size):
+    """
+    Resizes image if > size, then pads to size x size with right/bottom padding.
+    """
+    w, h = img.size
+
+    # --- New Logic: Resize if larger than size ---
     if w > size or h > size:
-        # Determine the scaling factor to keep the largest side at 512
+        # Determine the scaling factor to keep the largest side at size
         scale = size / max(w, h)
         new_w = int(w * scale)
         new_h = int(h * scale)
@@ -24,8 +29,8 @@ def pad_to_512(img):
         # Update dimensions for the padding step
         w, h = img.size
 
-    # --- Original Logic: Pad to 512 ---
-    # (If the image is already 512x512, this will result in 0 padding)
+    # --- Original Logic: Pad to size ---
+    # (If the image is already size x size, this will result in 0 padding)
     pad_w = max(0, size - w)
     pad_h = max(0, size - h)
     

@@ -161,6 +161,7 @@ class TaskOrchestrator:
     def truncate_timeline(self, text, truncation_config=None):
         """
         Truncate timeline based on configuration.
+        Always preserves the first 4 rows (first unique event) before applying truncation.
         
         Args:
             text: The timeline text to truncate
@@ -172,18 +173,40 @@ class TaskOrchestrator:
         Returns:
             Truncated timeline string
         """
-        if truncation_config is None:
-            # Default: no truncation
-            return str(text)
-        
         text_str = str(text)
+        
+        # Split into lines and preserve first 4 rows
+        lines = text_str.split('\n')
+        if len(lines) <= 4:
+            # If timeline has 4 or fewer lines, return as-is
+            return text_str
+        
+        # Keep first 4 rows (first unique event)
+        first_4_rows = '\n'.join(lines[:4])
+        remaining_text = '\n'.join(lines[4:])
+        
+        if truncation_config is None:
+            # Default: no truncation, but still preserve first 4 rows
+            return first_4_rows + '\n' + remaining_text
+        
         mode = truncation_config.get('mode', 'max_chars')
         
         if mode == 'max_chars':
             max_chars = truncation_config.get('max_chars', 5000)
-            if len(text_str) > max_chars:
-                return text_str[:max_chars] + "... [TRUNCATED]"
-            return text_str
+            # Reserve space for first 4 rows + separator
+            first_4_chars = len(first_4_rows)
+            remaining_max_chars = max_chars - first_4_chars - len('\n')
+            
+            if remaining_max_chars <= 0:
+                # If first 4 rows already exceed max_chars, just return them
+                return first_4_rows
+            
+            if len(remaining_text) > remaining_max_chars:
+                truncated_remaining = remaining_text[:remaining_max_chars] + "... [TRUNCATED]"
+            else:
+                truncated_remaining = remaining_text
+            
+            return first_4_rows + '\n' + truncated_remaining
         
         elif mode == 'last_k_events':
             initial_k = truncation_config.get('k', 10)
@@ -286,8 +309,8 @@ class TaskOrchestrator:
             return text_str
         
         else:
-            # Unknown mode, return original
-            return text_str
+            # Unknown mode, return first 4 rows + remaining text
+            return first_4_rows + '\n' + remaining_text
 
     def run_inference(self, task_names=None):
         # Determine which tasks to run
@@ -438,9 +461,14 @@ class TaskOrchestrator:
         truncation_config = self.cfg.get('timeline_truncation', None)
         df[timeline_col] = df[timeline_col].apply(lambda x: self.truncate_timeline(x, truncation_config))
         base_prompt_template = self.prompts_map.get(task_name, "[PATIENT_TIMELINE]")
-        df['dynamic_prompt'] = df[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
+        
+        # For 'no_timeline' experiment, replace PATIENT_TIMELINE with empty string
+        if experiment == 'no_timeline':
+            df['dynamic_prompt'] = base_prompt_template.replace('[PATIENT_TIMELINE]', '')
+        else:
+            df['dynamic_prompt'] = df[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
-        dataset = PromptDataset(df=df, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client) 
+        dataset = PromptDataset(df=df, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type) 
         loader = DataLoader(
             dataset,
             batch_size=self.cfg['runtime']['batch_size'],
@@ -462,18 +490,220 @@ class TaskOrchestrator:
                 continue
 
             try:
+                # Track maximum input token length for this batch
+                max_input_tokens = 0
+                # Token counting helper (works across adapters).
+                # Priority:
+                # - tensor dicts with input_ids (HF-style)
+                # - dicts with prompt (vLLM-style)
+                # - raw strings / (text, image) tuples (LMDeploy InternVL)
+                # Falls back to whitespace tokenization if no tokenizer is available.
+                tokenizer = None
+                if getattr(self, "processor", None) is not None:
+                    tokenizer = getattr(self.processor, "tokenizer", None)
+                if tokenizer is None:
+                    tokenizer = getattr(self.model, "tokenizer", None)
+
+                def _count_text_tokens(text: str) -> int:
+                    if text is None:
+                        return 0
+                    text = str(text)
+                    if tokenizer is not None and hasattr(tokenizer, "encode"):
+                        try:
+                            # HuggingFace-style
+                            return len(tokenizer.encode(text, add_special_tokens=False))
+                        except TypeError:
+                            # Some tokenizers don't accept add_special_tokens
+                            return len(tokenizer.encode(text))
+                        except Exception:
+                            pass
+                    # Fallback (approximate)
+                    return len(text.split())
+
+                def _count_input_tokens(inp) -> int:
+                    # HF-style dict
+                    if isinstance(inp, dict):
+                        ids = inp.get("input_ids", None)
+                        if ids is not None and hasattr(ids, "shape"):
+                            try:
+                                # [B, T] or [T]
+                                if len(ids.shape) >= 2:
+                                    return int(ids.shape[-1])
+                                return int(ids.shape[0])
+                            except Exception:
+                                pass
+                        if "prompt" in inp:
+                            return _count_text_tokens(inp["prompt"])
+                        if "text" in inp:
+                            return _count_text_tokens(inp["text"])
+                        return 0
+                    # LMDeploy InternVL: either "text" or (text, image/images)
+                    if isinstance(inp, tuple) and len(inp) >= 1:
+                        return _count_text_tokens(inp[0])
+                    if isinstance(inp, str):
+                        return _count_text_tokens(inp)
+                    return 0
+
                 if 'gemma' in self.model_type:
-                    all_inputs = []
+                    # For Gemma models, we need to handle different scenarios:
+                    # - Text but no images
+                    # - Single image and text
+                    # - Multiple images and text
+                    # - Multiple images but no text
+                    # 
+                    # Check if we can batch items together or need to process individually
+                    # Process individually if:
+                    # 1. Any item has multiple images (list with > 1 image)
+                    # 2. Mixed batch (some have images, some don't, and we have multiple images)
+                    # Otherwise, try to batch
+                    
+                    has_multiple_images = False
+                    has_single_images = False
+                    has_no_images = False
+                    
                     for item in new_items:
-                        single_msg = self.adapter.create_template(item)
-                        single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
-                        all_inputs.append(single_inp)
-                    batched_inputs = self.adapter.stack_inputs(all_inputs, self.model)
-                    outputs = self.adapter.infer(self.model, self.processor, batched_inputs, self.cfg['runtime']["max_new_tokens"])
+                        image = item.get('image', None)
+                        if image is not None:
+                            if isinstance(image, list):
+                                if len(image) > 1:
+                                    has_multiple_images = True
+                                elif len(image) == 1:
+                                    has_single_images = True
+                            else:
+                                has_single_images = True
+                        else:
+                            has_no_images = True
+                    
+                    # Determine if we should process individually or batch
+                    # Process individually if:
+                    # - Any item has multiple images (different structure)
+                    # - Mixed batch with multiple images (complex stacking)
+                    should_process_individually = (
+                        has_multiple_images or
+                        (has_multiple_images and (has_single_images or has_no_images))
+                    )
+                    
+                    if should_process_individually:
+                        # Process items individually to handle different structures
+                        outputs = []
+                        for item in new_items:
+                            try:
+                                # Validate item is a dict
+                                if not isinstance(item, dict):
+                                    raise TypeError(f"Expected item to be a dict, got {type(item)}")
+                                
+                                single_msg = self.adapter.create_template(item)
+                                single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
+                                
+                                # prepare_inputs may return a dict (single item) or list (multiple items)
+                                # For single item, it should be a dict or dict-like (e.g., BatchFeature)
+                                if isinstance(single_inp, list):
+                                    # If it's a list with one item, extract it
+                                    if len(single_inp) == 1:
+                                        single_inp = single_inp[0]
+                                    else:
+                                        # Multiple items in list, process each
+                                        for inp in single_inp:
+                                            # Convert BatchFeature or other dict-like objects to dict if needed
+                                            from collections.abc import Mapping
+                                            if isinstance(inp, Mapping) and not isinstance(inp, dict):
+                                                inp = dict(inp)
+                                            elif not isinstance(inp, dict):
+                                                raise TypeError(f"Expected input to be a dict or dict-like (Mapping), got {type(inp)}")
+                                            single_output = self.adapter.infer(self.model, self.processor, inp, self.cfg['runtime']["max_new_tokens"])
+                                            if isinstance(single_output, list):
+                                                outputs.extend(single_output)
+                                            else:
+                                                outputs.append(single_output)
+                                        continue
+                                
+                                # Convert BatchFeature or other dict-like objects to dict if needed
+                                from collections.abc import Mapping
+                                if isinstance(single_inp, Mapping) and not isinstance(single_inp, dict):
+                                    single_inp = dict(single_inp)
+                                elif not isinstance(single_inp, dict):
+                                    raise TypeError(f"Expected prepare_inputs to return a dict or dict-like (Mapping) for single item, got {type(single_inp)}")
+                                
+                                # Calculate input tokens for this item
+                                token_count = _count_input_tokens(single_inp)
+                                # Optional: rough image-token bump for vLLM Gemma prompts (kept approximate)
+                                if isinstance(single_inp, dict) and single_inp.get("multi_modal_data") and single_inp["multi_modal_data"].get("image"):
+                                    images = single_inp["multi_modal_data"]["image"]
+                                    num_images = len(images) if isinstance(images, list) else 1
+                                    token_count += num_images * 256
+                                max_input_tokens = max(max_input_tokens, token_count)
+                                
+                                single_output = self.adapter.infer(self.model, self.processor, single_inp, self.cfg['runtime']["max_new_tokens"])
+                                # Ensure single_output is a list
+                                if isinstance(single_output, list):
+                                    outputs.extend(single_output)
+                                else:
+                                    outputs.append(single_output)
+                            except Exception as e:
+                                print(f"Error processing item individually: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                # Add empty string as placeholder to maintain alignment
+                                outputs.append("")
+                    
+                    # Log maximum input tokens for individually processed batch
+                    if should_process_individually:
+                        print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
+                    else:
+                        # All items have similar structure, batch them together
+                        all_inputs = []
+                        for item in new_items:
+                            single_msg = self.adapter.create_template(item)
+                            single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
+                            
+                            # prepare_inputs returns dict for single item or list for multiple
+                            if isinstance(single_inp, list):
+                                # If list, extract the single item (should be only one)
+                                if len(single_inp) == 1:
+                                    single_inp = single_inp[0]
+                                else:
+                                    raise ValueError(f"Expected single input from prepare_inputs, got list with {len(single_inp)} items")
+                            
+                            # Convert BatchFeature or other dict-like objects to dict if needed
+                            from collections.abc import Mapping
+                            if isinstance(single_inp, Mapping) and not isinstance(single_inp, dict):
+                                single_inp = dict(single_inp)
+                            elif not isinstance(single_inp, dict):
+                                raise TypeError(f"Expected prepare_inputs to return a dict or dict-like (Mapping), got {type(single_inp)}")
+                            
+                            all_inputs.append(single_inp)
+                        
+                        batched_inputs = self.adapter.stack_inputs(all_inputs, self.model)
+                        
+                        # Calculate max input tokens for batched inputs
+                        for inp in all_inputs:
+                            token_count = _count_input_tokens(inp)
+                            # Optional: rough image-token bump for vLLM Gemma prompts (kept approximate)
+                            if isinstance(inp, dict) and inp.get("multi_modal_data") and inp["multi_modal_data"].get("image"):
+                                images = inp["multi_modal_data"]["image"]
+                                num_images = len(images) if isinstance(images, list) else 1
+                                token_count += num_images * 256
+                            max_input_tokens = max(max_input_tokens, token_count)
+                        
+                        outputs = self.adapter.infer(self.model, self.processor, batched_inputs, self.cfg['runtime']["max_new_tokens"])
+                        
+                        # Log maximum input tokens for batched processing
+                        print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
                 else:
                     messages = [self.adapter.create_template(item) for item in new_items]
                     inputs = self.adapter.prepare_inputs(messages, self.processor, self.model)
+                    
+                    # Calculate max input tokens
+                    if isinstance(inputs, list):
+                        for inp in inputs:
+                            max_input_tokens = max(max_input_tokens, _count_input_tokens(inp))
+                    else:
+                        max_input_tokens = max(max_input_tokens, _count_input_tokens(inputs))
+                    
                     outputs = self.adapter.infer(self.model, self.processor, inputs, self.cfg['runtime']["max_new_tokens"])
+                    
+                    # Log maximum input tokens for non-gemma models
+                    print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
                 
                 # Process outputs
                 for item, out_text in zip(new_items, outputs):

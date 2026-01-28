@@ -5,7 +5,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from results.results_analyzer import _extract_answer, is_answer_correct
+from results.results_analyzer import _extract_answer, is_answer_correct, map_label_to_answer
 
 
 def _clean_question(text):
@@ -59,9 +59,9 @@ def calculate_accuracy(df, mapping):
         # Extract response (primary answer for display)
         df['cleaned_response'] = df['model_response'].apply(_extract_answer)
         
-        # Map label if mapping and label column exist
+        # Map label if mapping and label column exist (handles int/float labels vs string mapping keys)
         if mapping and 'label' in df.columns:
-            df['mapped_label'] = df['label'].astype(str).map(mapping)
+            df['mapped_label'] = df['label'].apply(lambda lbl: map_label_to_answer(lbl, mapping))
             
             # Accuracy: any candidate (| splits, \boxed{}, <answer>/<label>, last word/phrase) matches
             df['is_correct'] = df.apply(
