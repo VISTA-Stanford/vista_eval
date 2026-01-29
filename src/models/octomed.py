@@ -105,8 +105,8 @@ class OctoMedAdapter(BaseVLMAdapter):
             gpu_memory_utilization=0.85,
             enable_chunked_prefill=True,
             enable_prefix_caching=False,
-            mm_processor_kwargs={"cache_gb": 0},
-            limit_mm_per_prompt={"image": 100}, 
+            mm_processor_cache_gb=0,
+            limit_mm_per_prompt={"image": 100, "video": 0}, 
         )
         
         # Load processor for chat template formatting

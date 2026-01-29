@@ -83,21 +83,46 @@ def _extract_answer_candidates(text):
         # Extract content from angle brackets like <Yes> or <"Yes"> (but not <answer>/<label> tags)
         # Pattern: < followed by optional quote, content, optional quote, >
         # Handles: <Yes>, <"Yes">, <'Yes'>, <Yes, No>
+        # Only extract short angle brackets (<= 50 chars) to avoid matching long explanations
         for m in re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', s):
             content = m.group(2).strip()
             # Skip if it looks like an XML tag (contains / or is a known tag name)
             if content and not content.startswith('/') and content.lower() not in ['answer', 'label']:
-                add(content)
+                # Only add if it's a short answer (likely to be Yes/No/short label)
+                # Skip long explanations that are in angle brackets
+                if len(content) <= 50:
+                    add(content)
 
     collect_from(text)
 
     if '|' in text:
-        for part in text.split('|'):
-            part = part.strip()
-            if not part:
-                continue
-            collect_from(part)
-            add(part)
+        # Split on the last occurrence of '|'
+        parts = text.rsplit('|', 1)
+        if len(parts) == 2:
+            left_part, right_part = parts[0].strip(), parts[1].strip()
+            # Process both parts
+            if left_part:
+                collect_from(left_part)
+                add(left_part)
+            if right_part:
+                collect_from(right_part)
+                add(right_part)
+        else:
+            # Fallback: if rsplit doesn't work as expected, process all parts
+            for part in text.split('|'):
+                part = part.strip()
+                if not part:
+                    continue
+                collect_from(part)
+                add(part)
+        
+        # Final check: if '|' is present, also check the left side of the first '|'
+        first_pipe_idx = text.find('|')
+        if first_pipe_idx > 0:  # '|' is not at the beginning
+            left_side = text[:first_pipe_idx].strip()
+            if left_side:
+                collect_from(left_side)
+                add(left_side)
     else:
         words = text.split()
         if words:
@@ -115,7 +140,7 @@ def _extract_answer_candidates(text):
 def _extract_answer(text):
     """
     Extract the primary answer from the model's raw output (for display / cleaned_response).
-    Priority: \\boxed{} > <answer> > <label> > angle brackets <Yes> or <"Yes"> > pipe last segment > last word/phrase > full text.
+    Priority: \\boxed{} > <answer> > <label> > pipe last segment > angle brackets <Yes> or <"Yes"> > last word/phrase > full text.
     """
     if pd.isna(text) or not str(text).strip():
         return ""
@@ -129,24 +154,57 @@ def _extract_answer(text):
     m = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
     if m:
         return _clean_extracted_answer(m.group(1))
-    # Check for angle brackets anywhere in text (e.g., <Yes> or <"Yes">)
-    angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', text)
-    if angle_match:
+    
+    # Check for pipes FIRST (before angle brackets) to handle cases like "<explanation> | No"
+    if '|' in text:
+        # Split on the last occurrence of '|'
+        parts = text.rsplit('|', 1)
+        if len(parts) == 2:
+            left_part, right_part = parts[0].strip(), parts[1].strip()
+            # Check right part (after last '|') first
+            if right_part:
+                # Check for angle brackets in the right part (e.g., | <Yes> or | <"Yes">)
+                angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', right_part)
+                if angle_match:
+                    content = angle_match.group(2).strip()
+                    if content and content.lower() not in ['answer', 'label']:
+                        return _clean_extracted_answer(content)
+                return _clean_extracted_answer(right_part)
+            # If right part is empty, check left part
+            if left_part:
+                return _clean_extracted_answer(left_part)
+        else:
+            # Fallback: if rsplit doesn't work as expected
+            parts = [p.strip() for p in text.split('|') if p.strip()]
+            if parts:
+                last_part = parts[-1]
+                # Check for angle brackets in the last part
+                angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', last_part)
+                if angle_match:
+                    content = angle_match.group(2).strip()
+                    if content and content.lower() not in ['answer', 'label']:
+                        return _clean_extracted_answer(content)
+                return _clean_extracted_answer(last_part)
+    
+    # Final check: if '|' is present and no answer found yet, check the left side of first '|'
+    if '|' in text:
+        first_pipe_idx = text.find('|')
+        if first_pipe_idx > 0:  # '|' is not at the beginning
+            left_side = text[:first_pipe_idx].strip()
+            if left_side:
+                return _clean_extracted_answer(left_side)
+    
+    # Check for angle brackets (e.g., <Yes> or <"Yes">) - but only short ones to avoid matching explanations
+    # Only match angle brackets that are short (<= 50 chars) to avoid matching long explanations
+    angle_matches = list(re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', text))
+    for angle_match in angle_matches:
         content = angle_match.group(2).strip()
         if content and content.lower() not in ['answer', 'label']:
-            return _clean_extracted_answer(content)
+            # Only extract if it's a short answer (likely to be Yes/No/short label)
+            # Skip long explanations that are in angle brackets
+            if len(content) <= 50:
+                return _clean_extracted_answer(content)
     
-    if '|' in text:
-        parts = [p.strip() for p in text.split('|') if p.strip()]
-        if parts:
-            last_part = parts[-1]
-            # Check for angle brackets in the last part (e.g., | <Yes> or | <"Yes">)
-            angle_match = re.search(r'<(["\']?)([^<>"\'/]+?)\1>', last_part)
-            if angle_match:
-                content = angle_match.group(2).strip()
-                if content and content.lower() not in ['answer', 'label']:
-                    return _clean_extracted_answer(content)
-            return _clean_extracted_answer(last_part)
     words = text.split()
     if words:
         return _clean_extracted_answer(words[-1])

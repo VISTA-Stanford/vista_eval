@@ -21,6 +21,47 @@ def extract_experiment_from_filename(filename):
     return 'default'
 
 
+def parse_experiment_comments(config_path):
+    """Parse YAML file to extract experiment names and their comments."""
+    experiment_display_mapping = {}
+    try:
+        with open(config_path, 'r') as f:
+            lines = f.readlines()
+        
+        in_experiments_section = False
+        for line in lines:
+            stripped = line.strip()
+            # Check if we're entering the experiments section
+            if stripped.startswith('experiments:'):
+                in_experiments_section = True
+                continue
+            
+            # Check if we've left the experiments section (next top-level key)
+            if in_experiments_section:
+                if stripped and not stripped.startswith('#') and not stripped.startswith('-') and ':' in stripped:
+                    # We've hit a new top-level section
+                    break
+                
+                # Parse experiment lines: "- experiment_name # comment"
+                if stripped.startswith('-'):
+                    # Remove the leading '-'
+                    content = stripped[1:].strip()
+                    # Split on '#' to separate name from comment
+                    if '#' in content:
+                        parts = content.split('#', 1)
+                        exp_name = parts[0].strip()
+                        comment = parts[1].strip()
+                        experiment_display_mapping[exp_name] = comment
+                    else:
+                        # No comment, use the name itself
+                        exp_name = content.strip()
+                        experiment_display_mapping[exp_name] = exp_name
+    except Exception as e:
+        print(f"Warning: Could not parse experiment comments: {e}")
+    
+    return experiment_display_mapping
+
+
 def load_config(config_path):
     """Load config and extract models and experiments."""
     try:
@@ -42,6 +83,9 @@ def load_config(config_path):
         # Extract experiments
         valid_experiments = config.get('experiments', [])
         
+        # Extract experiment display names from comments
+        experiment_display_mapping = parse_experiment_comments(config_path)
+        
         # Extract tasks
         valid_tasks = config.get('tasks', [])
         
@@ -49,6 +93,7 @@ def load_config(config_path):
             'models': valid_models,
             'model_name_mapping': model_name_mapping,
             'experiments': valid_experiments,
+            'experiment_display_mapping': experiment_display_mapping,
             'tasks': valid_tasks
         }
     except Exception as e:
@@ -87,6 +132,7 @@ def generate_questions_pdf(results_path='/home/dcunhrya/results',
     valid_models = config['models']
     model_name_mapping = config['model_name_mapping']
     valid_experiments = config['experiments']
+    experiment_display_mapping = config.get('experiment_display_mapping', {})
     valid_tasks = config['tasks']
     
     print(f"Loaded {len(valid_models)} models: {valid_models}")
@@ -253,15 +299,18 @@ def generate_questions_pdf(results_path='/home/dcunhrya/results',
                         response = data.get('model_response', 'N/A').replace('<', '&lt;').replace('>', '&gt;')
                         is_correct = data.get('is_correct', None)
                         
+                        # Get display name for experiment (use comment if available, otherwise use experiment name)
+                        experiment_display = experiment_display_mapping.get(experiment, experiment)
+                        
                         # Add is_correct indicator
                         if is_correct is not None:
                             if is_correct:
                                 correct_indicator = "<font color='#27ae60'><b>[CORRECT]</b></font>"
                             else:
                                 correct_indicator = "<font color='#c0392b'><b>[INCORRECT]</b></font>"
-                            story.append(Paragraph(f"<b>{experiment}:</b> {correct_indicator} {response}", experiment_style))
+                            story.append(Paragraph(f"<b>{experiment_display}:</b> {correct_indicator} {response}", experiment_style))
                         else:
-                            story.append(Paragraph(f"<b>{experiment}:</b> {response}", experiment_style))
+                            story.append(Paragraph(f"<b>{experiment_display}:</b> {response}", experiment_style))
                 
                 story.append(Spacer(1, 0.05*inch))
             

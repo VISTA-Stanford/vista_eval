@@ -213,7 +213,7 @@ class TaskOrchestrator:
             # Get safety max_chars limit to prevent token overflow
             # Rough estimate: 1 token ≈ 4 characters, but can vary
             # Model max is 14588 tokens, so we use ~30000 chars to be safe (allows for prompt overhead)
-            safety_max_chars = truncation_config.get('max_chars', 40000)
+            safety_max_chars = truncation_config.get('max_chars', 80000)
             
             # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
             # Find all event start positions and extract dates
@@ -375,7 +375,7 @@ class TaskOrchestrator:
             df[timeline_col] = None
             print(f"    Creating new '{timeline_col}' column to store fetched timelines.")
 
-        # --- COMMENTED OUT: Fetch patient timelines from meds database ---
+        # Fetch patient timelines from meds database
         # This code is kept as skeleton for future use
         # print(f"    Fetching patient timelines from meds database...")
         # df[timeline_col] = df.apply(self._get_patient_timeline, axis=1)
@@ -737,6 +737,8 @@ class TaskOrchestrator:
 
             except Exception as e:
                 print(f"Error in batch: {e}")
+                # Still log batch info even on error (batch_counter already incremented)
+                print(f"Batch {batch_counter}: Max input tokens = {max_input_tokens} (error occurred)")
                 continue
 
         # 6. Final Save for remaining items
