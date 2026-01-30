@@ -16,8 +16,8 @@ models:
   - type: "intern"
     name: "OpenGVLab/InternVL3_5-8B"
   
-  # - type: "gemma3"
-  #   name: "google/medgemma-1.5-4b-it"
+  - type: "gemma3"
+    name: "google/medgemma-1.5-4b-it"
 
   - type: "gemma3"
     name: "google/medgemma-4b-it"
@@ -46,12 +46,12 @@ tasks:
   # - has_recurrence_5_yr
 
 experiments:
-  # - no_image # no image
-  # - axial_1_image # middle axial image
-  # - all_image # middle image from each view
+  - no_image # no image
+  - axial_1_image # middle axial image
+  - all_image # middle image from each view
   # - axial_all_image # 10 axial images
   # - sagittal_all_image # 10 sagittal images
-  # - no_timeline # 100 axial images (no timeline)
+  - no_timeline # 100 axial images (no timeline)
   - no_report # no radiology report
 
 # Timeline truncation configuration
