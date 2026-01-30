@@ -32,7 +32,7 @@ class PromptDataset(Dataset):
             df: Dataframe containing the data.
             prompt_col: The column name to use for the text prompt.
             add_options: Whether to append options to the prompt.
-            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', or 'no_timeline'
+            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', or 'no_report'
             storage_client: GCP Storage client for loading NIfTI files from bucket
             model_type: Model type string (e.g., 'gemma3') to determine preprocessing
         """
@@ -206,12 +206,30 @@ class PromptDataset(Dataset):
                                 img = None
                                 
                         elif self.experiment == 'no_timeline':
-                            # Extract 50 evenly spaced axial slices (3rd dimension)
-                            # This experiment is for when no patient timeline is provided
+                            # Extract 100 evenly spaced axial slices (3rd dimension)
                             if len(img_data.shape) > 2:
                                 depth = img_data.shape[2]
                                 img_list = []
                                 num_slices = 100
+                                for i in range(num_slices):
+                                    if num_slices > 1:
+                                        position = i / (num_slices - 1)
+                                    else:
+                                        position = 0.0
+                                    index = int(position * (depth - 1))
+                                    if index >= depth:
+                                        index = depth - 1
+                                    axial_slice = img_data[:, :, index]
+                                    img_list.append(self._process_ct_slice(axial_slice))
+                                img = img_list
+                            else:
+                                img = None
+                        elif self.experiment == 'no_report':
+                            # Extract 50 evenly spaced axial slices (3rd dimension)
+                            if len(img_data.shape) > 2:
+                                depth = img_data.shape[2]
+                                img_list = []
+                                num_slices = 50
                                 for i in range(num_slices):
                                     # Calculate position: 0.0, 1/(num_slices-1), 2/(num_slices-1), ..., 1.0
                                     if num_slices > 1:
@@ -224,7 +242,7 @@ class PromptDataset(Dataset):
                                     axial_slice = img_data[:, :, index]
                                     img_list.append(self._process_ct_slice(axial_slice))
                                 img = img_list
-                                # print(f"[IMAGE] Using NIfTI no_timeline (50 slices) from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
+                                # print(f"[IMAGE] Using NIfTI no_report (50 axial slices) from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
                             else:
                                 img = None
                     except Exception as e:

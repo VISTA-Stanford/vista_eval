@@ -158,6 +158,19 @@ class TaskOrchestrator:
         
         return unique_dates
 
+    def _get_first_4_rows(self, text):
+        """
+        Return the first 4 lines of the patient timeline.
+        Used so every experiment (including no_timeline) includes the first 4 rows.
+        """
+        if pd.isna(text) or text is None:
+            return ""
+        text_str = str(text).strip()
+        if not text_str:
+            return ""
+        lines = text_str.split("\n")
+        return "\n".join(lines[:4])
+
     def truncate_timeline(self, text, truncation_config=None):
         """
         Truncate timeline based on configuration.
@@ -268,12 +281,14 @@ class TaskOrchestrator:
                     current_k -= 1
                     continue
                 
-                truncated = text_str[start_pos:]
+                # Always include first 4 rows + truncated rest (no duplication)
+                rest_start = max(start_pos, len(first_4_rows) + 1)
+                truncated = text_str[rest_start:]
                 
                 # Check if the truncated text fits within the safety limit
                 if len(truncated) <= safety_max_chars:
-                    # Success! Return the truncated text
-                    return truncated
+                    # Success! Return first 4 rows + truncated text
+                    return first_4_rows + "\n" + truncated
                 
                 # Too long, decrease k and try again
                 current_k -= 1
@@ -289,7 +304,8 @@ class TaskOrchestrator:
                         break
                 
                 if start_pos is not None:
-                    truncated = text_str[start_pos:]
+                    rest_start = max(start_pos, len(first_4_rows) + 1)
+                    truncated = text_str[rest_start:]
                     # Find the last event marker before the safety limit
                     safety_matches = list(re.finditer(pattern, truncated[:safety_max_chars]))
                     if safety_matches:
@@ -299,14 +315,15 @@ class TaskOrchestrator:
                         event_end = truncated.find('\n', last_safe_match.end())
                         if event_end == -1:
                             event_end = last_safe_match.end()
-                        return truncated[:event_end] + "\n... [TRUNCATED - even single date too long]"
+                        return first_4_rows + "\n" + truncated[:event_end] + "\n... [TRUNCATED - even single date too long]"
                     else:
-                        return truncated[:safety_max_chars] + "... [TRUNCATED]"
+                        return first_4_rows + "\n" + truncated[:safety_max_chars] + "... [TRUNCATED]"
             
-            # Final fallback: just truncate at character limit
-            if len(text_str) > safety_max_chars:
-                return text_str[:safety_max_chars] + "... [TRUNCATED]"
-            return text_str
+            # Final fallback: just truncate at character limit (still prepend first 4 rows)
+            rest_max = safety_max_chars - len(first_4_rows) - 1
+            if len(remaining_text) > rest_max:
+                return first_4_rows + "\n" + remaining_text[:rest_max] + "... [TRUNCATED]"
+            return first_4_rows + "\n" + remaining_text
         
         else:
             # Unknown mode, return first 4 rows + remaining text
@@ -321,23 +338,41 @@ class TaskOrchestrator:
         # Get experiments from config (default to ['no_image'] if not specified)
         experiments = self.cfg.get('experiments', ['no_image'])
 
-        # Run each task for each experiment
+        # For each task: load data (different CSV for no_report), then run all experiments
         for task_info in tasks_to_run:
+            task_name = task_info['task_name']
+            # no_report uses _subsampled_no_report.csv; other experiments use normal CSV
+            needs_no_report = 'no_report' in experiments
+            needs_normal = any(e != 'no_report' for e in experiments)
+            loaded_normal = self._load_task_data(task_info, use_no_report_csv=False) if needs_normal else None
+            loaded_no_report = self._load_task_data(task_info, use_no_report_csv=True) if needs_no_report else None
             for experiment in experiments:
-                self._process_single_task(task_info, experiment)
+                print(f"\n>>> Starting Task: {task_name} | Experiment: {experiment}")
+                if experiment == 'no_report':
+                    loaded = loaded_no_report
+                else:
+                    loaded = loaded_normal
+                if loaded is None:
+                    continue
+                df, timeline_col, source_csv = loaded
+                self._process_single_task_with_data(task_info, experiment, df, timeline_col)
 
-    def _process_single_task(self, task_info, experiment='no_image'):
+    def _load_task_data(self, task_info, use_no_report_csv=False):
+        """
+        Query BigQuery once per task and merge with local CSV timelines.
+        Returns (df, timeline_col, source_csv) or None on failure.
+        Same data is reused for all experiments.
+        When use_no_report_csv=True, loads from *_subsampled_no_report.csv (for no_report experiment).
+        """
         task_name = task_info['task_name']
-        source_csv = task_info['task_source_csv'] # Acts as Table ID (e.g., 'oncology')
-        print(f"\n>>> Starting Task: {task_name} | Experiment: {experiment}")
+        source_csv = task_info['task_source_csv']
 
-        # --- BIGQUERY LOADING START ---
-        # Construct Table ID: project.dataset.table
+        # --- BIGQUERY LOADING (once per task) ---
         dataset_id = "vista_bench_v1_1"
         full_table_id = f"{self.project_id}.{dataset_id}.{source_csv}"
-        
-        print(f"    Querying BigQuery table: {full_table_id} for task='{task_name}'...")
-        
+        print(f"\n>>> Loading data for task: {task_name} (one BigQuery query for all experiments)")
+        print(f"    Querying BigQuery table: {full_table_id}...")
+
         query = f"""
             SELECT *
             FROM `{full_table_id}`
@@ -348,99 +383,70 @@ class TaskOrchestrator:
                 bigquery.ScalarQueryParameter("task", "STRING", task_name)
             ]
         )
-
         try:
             df = self.bq_client.query(query, job_config=job_config).to_dataframe()
         except Exception as e:
             print(f"!!! BigQuery Error for {task_name}: {e}")
-            return
-
+            return None
         if df.empty:
             print(f"!!! No data found for task '{task_name}' in BigQuery.")
-            return
-            
+            return None
         print(f"    Loaded {len(df)} rows from BigQuery.")
-        # --- BIGQUERY LOADING END ---
-        
-        # Ensure unique index for tracking
+
         if 'index' not in df.columns:
             df['index'] = df.index
 
-        # Dynamic Column Detection (works for BQ dataframe too)
         timeline_col = next((c for c in df.columns if 'patient_string' in c.lower()), None)
-        
-        # If timeline column doesn't exist, create it
         if not timeline_col:
             timeline_col = 'patient_string'
             df[timeline_col] = None
-            print(f"    Creating new '{timeline_col}' column to store fetched timelines.")
-
-        # Fetch patient timelines from meds database
-        # This code is kept as skeleton for future use
-        # print(f"    Fetching patient timelines from meds database...")
-        # df[timeline_col] = df.apply(self._get_patient_timeline, axis=1)
-        # print(f"    Fetched {len(df[df[timeline_col].notna()])} patient timelines.")
 
         # --- LOAD PATIENT TIMELINES FROM LOCAL CSV ---
-        # Load local CSV file (same logic as run.py)
-        # Check if subsample flag is set to use _subsampled.csv files
         use_subsampled = self.cfg.get('subsample', False)
-        if use_subsampled:
-            csv_filename = f"{task_name}_subsampled.csv"
+        if use_no_report_csv and use_subsampled:
+            csv_filename = f"{task_name}_subsampled_no_report.csv"
         else:
-            csv_filename = f"{task_name}.csv"
+            csv_filename = f"{task_name}_subsampled.csv" if use_subsampled else f"{task_name}.csv"
         csv_path = self.base_path / source_csv / csv_filename
         print(f"    Loading patient timelines from local CSV: {csv_path}")
-        
         if not csv_path.exists():
             print(f"!!! Error: Local CSV file not found at {csv_path}")
-            return
-        
+            return None
         try:
             csv_df = pd.read_csv(csv_path)
             print(f"    Loaded {len(csv_df)} rows from local CSV.")
-            
-            # Ensure person_id exists in both dataframes
             if 'person_id' not in df.columns:
                 print(f"!!! Error: 'person_id' column not found in BigQuery data.")
-                return
-            
+                return None
             if 'person_id' not in csv_df.columns:
                 print(f"!!! Error: 'person_id' column not found in CSV data.")
-                return
-            
-            # Find patient_timeline column in CSV (case-insensitive)
+                return None
             csv_timeline_col = next((c for c in csv_df.columns if 'patient_string' in c.lower() or 'patient_timeline' in c.lower()), None)
-            
             if csv_timeline_col is None:
                 print(f"!!! Error: Patient timeline column not found in CSV.")
-                return
-            
-            print(f"    Merging BigQuery data with CSV on 'person_id' to get patient timelines...")
-            # Merge on person_id to get patient_timeline from CSV
-            # Only merge the timeline column to avoid duplicate columns
+                return None
+            print(f"    Merging BigQuery data with CSV on 'person_id'...")
             merge_df = csv_df[['person_id', csv_timeline_col]].copy()
             merge_df = merge_df.rename(columns={csv_timeline_col: timeline_col})
-            
-            # Drop existing timeline_col from df if it exists (we'll use CSV version)
             if timeline_col in df.columns:
                 df = df.drop(columns=[timeline_col])
-            
-            # Merge with BigQuery data (left join to keep all BigQuery rows)
             df = df.merge(merge_df, on='person_id', how='inner')
-            
             matched_count = df[timeline_col].notna().sum()
-            print(f"    Matched {matched_count} out of {len(df)} rows with patient timelines from CSV.")
-            
+            print(f"    Matched {matched_count} out of {len(df)} rows with patient timelines.")
         except Exception as e:
             print(f"!!! Error loading/merging CSV: {e}")
-            return
+            return None
 
-        # Count unique event dates (before truncation)
-        # print(f"    Counting unique event dates...")
         df['unique_events'] = df[timeline_col].apply(self.count_unique_event_dates)
+        truncation_config = self.cfg.get('timeline_truncation', None)
+        df[timeline_col] = df[timeline_col].apply(lambda x: self.truncate_timeline(x, truncation_config))
+        return (df, timeline_col, source_csv)
 
-        # 2. Setup Resume Logic
+    def _process_single_task_with_data(self, task_info, experiment, df, timeline_col):
+        """Run inference for one (task, experiment) using already-loaded task data."""
+        task_name = task_info['task_name']
+        source_csv = task_info['task_source_csv']
+
         # We keep the local folder structure for results
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -456,19 +462,19 @@ class TaskOrchestrator:
             except Exception as e:
                 print(f"Could not read existing file, starting fresh: {e}")
 
-        # 3. Prepare Prompt and Dataset
-        # Get truncation config from YAML
-        truncation_config = self.cfg.get('timeline_truncation', None)
-        df[timeline_col] = df[timeline_col].apply(lambda x: self.truncate_timeline(x, truncation_config))
+        # 3. Prepare Prompt and Dataset (experiment-specific; use copy so shared df is unchanged)
+        # Every experiment (including no_timeline) includes the first 4 rows of the patient timeline.
         base_prompt_template = self.prompts_map.get(task_name, "[PATIENT_TIMELINE]")
-        
-        # For 'no_timeline' experiment, replace PATIENT_TIMELINE with empty string
+        df_exp = df.copy()
         if experiment == 'no_timeline':
-            df['dynamic_prompt'] = base_prompt_template.replace('[PATIENT_TIMELINE]', '')
+            # no_timeline: only first 4 rows of timeline (no additional timeline)
+            df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(
+                lambda x: base_prompt_template.replace("[PATIENT_TIMELINE]", self._get_first_4_rows(x))
+            )
         else:
-            df['dynamic_prompt'] = df[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
+            df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
-        dataset = PromptDataset(df=df, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type) 
+        dataset = PromptDataset(df=df_exp, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type) 
         loader = DataLoader(
             dataset,
             batch_size=self.cfg['runtime']['batch_size'],
@@ -482,7 +488,7 @@ class TaskOrchestrator:
         results_buffer = []
         batch_counter = 0
 
-        for batch in tqdm(loader, desc=f"Inference {task_name}"):
+        for batch in tqdm(loader, desc=f"Inference {task_name} | {experiment}"):
             # Skip items already processed
             new_items = [item for item in batch if item['raw_row']['index'] not in existing_indices]
             
