@@ -62,7 +62,7 @@ def remove_imaging_lines_from_timeline(patient_string: str) -> str:
     # 2. Keep only the lines that DO NOT contain your target string
     filtered_lines = [
         line for line in lines 
-        if 'STANFORD_NOTE/imaging' not in line
+        if 'STANFORD_NOTE' not in line
     ]
 
     # 3. Join the valid lines back together with newlines
@@ -115,7 +115,7 @@ def main(
     config_path: str,
     valid_tasks_json_path: str,
     output_suffix: str = "_no_report",
-    overwrite: bool = False,
+    overwrite: bool = True,
 ):
     tasks, base_dir, subsample = load_tasks_and_config(config_path)
     if not subsample:
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", default=CONFIG_PATH, help="Path to all_tasks.yaml")
     parser.add_argument("--valid-tasks", default=VALID_TASKS_JSON_PATH, help="Path to valid_tasks.json")
     parser.add_argument("--suffix", default="_no_report", help="Suffix for output filenames (default: _no_report)")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
+    parser.add_argument("--overwrite", default=True, action="store_true", help="Overwrite existing output files")
     args = parser.parse_args()
     main(
         config_path=args.config,

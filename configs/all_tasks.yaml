@@ -34,16 +34,16 @@ tasks:
   - progression_assessment_discussed
   - pneumonitis_infection_discussed
   - pneumonitis_infection_answer
-  # - died_of_cancer_1_yr
-  # - died_of_cancer_2_yr
-  # - died_of_cancer_3_yr
-  # - died_of_cancer_4_yr
-  # - died_of_cancer_5_yr
-  # - has_recurrence_1_yr
-  # - has_recurrence_2_yr
-  # - has_recurrence_3_yr
-  # - has_recurrence_4_yr
-  # - has_recurrence_5_yr
+  - died_of_cancer_1_yr
+  - died_of_cancer_2_yr
+  - died_of_cancer_3_yr
+  - died_of_cancer_4_yr
+  - died_of_cancer_5_yr
+  - has_recurrence_1_yr
+  - has_recurrence_2_yr
+  - has_recurrence_3_yr
+  - has_recurrence_4_yr
+  - has_recurrence_5_yr
 
 experiments:
   - no_image # no image

@@ -1,7 +1,9 @@
 import os
+import json
 import pandas as pd
 import yaml
 import re
+import numpy as np
 from pathlib import Path
 from collections import defaultdict
 from reportlab.lib.pagesizes import letter
@@ -11,6 +13,16 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 
 from results.results_analyzer import is_answer_correct, map_label_to_answer
+
+# Experiments that include CT scan slices (no_image excluded)
+CT_EXPERIMENTS = [
+    'axial_1_image',      # 1 middle axial slice
+    'all_image',          # 3 slices: sagittal, coronal, axial middle
+    'axial_all_image',    # 10 axial slices
+    # 'sagittal_all_image', # 10 sagittal slices
+    'no_timeline',        # 100 axial slices
+    'no_report',          # 50 axial slices
+]
 
 
 def extract_experiment_from_filename(filename):
@@ -104,13 +116,184 @@ def get_task_mapping(base_path, task_name):
     """Get mapping for a task from valid_tasks.json."""
     tasks_json = Path(base_path) / 'tasks' / 'valid_tasks.json'
     if tasks_json.exists():
-        import json
         with open(tasks_json, 'r') as f:
             tasks_list = json.load(f)
             for task in tasks_list:
                 if task.get('task_name') == task_name:
                     return task.get('mapping', {})
     return {}
+
+
+def _local_path_to_nifti_path(local_path_str, download_base=None, prefix=None):
+    """Convert local_path (gs://... or path) to local NIfTI file path."""
+    if download_base is None:
+        download_base = Path('/home/dcunhrya/downloaded_ct_scans')
+    if prefix is None:
+        prefix = 'chaudhari_lab/ct_data/ct_scans/vista/nov25'
+    parts = local_path_str.split('/')
+    filename_no_ext = parts[-1].replace('.zip', '')
+    bucket_filename = f"{parts[-2]}__{filename_no_ext}.nii.gz"
+    return Path(download_base) / prefix / bucket_filename
+
+
+def _find_sample_nifti_path(base_path, valid_tasks, use_subsampled=True):
+    """Find first existing NIfTI path from task CSVs."""
+    tasks_json = Path(base_path) / 'tasks' / 'valid_tasks.json'
+    if not tasks_json.exists():
+        return None
+    with open(tasks_json, 'r') as f:
+        tasks_list = json.load(f)
+    suffix = '_subsampled' if use_subsampled else ''
+    for task in tasks_list:
+        task_name = task.get('task_name')
+        if valid_tasks and task_name not in valid_tasks:
+            continue
+        source_csv = task.get('task_source_csv')
+        if not source_csv:
+            continue
+        csv_name = f"{task_name}{suffix}.csv"
+        csv_path = Path(base_path) / source_csv / csv_name
+        if not csv_path.exists():
+            continue
+        try:
+            df = pd.read_csv(csv_path, nrows=500)
+            local_path_col = next((c for c in df.columns if c.lower() == 'local_path'), None)
+            if not local_path_col:
+                continue
+            for _, row in df.iterrows():
+                local_path_str = row[local_path_col]
+                if pd.notna(local_path_str) and isinstance(local_path_str, str):
+                    nifti_path = _local_path_to_nifti_path(local_path_str)
+                    if nifti_path.exists():
+                        return nifti_path
+        except Exception as e:
+            continue
+    return None
+
+
+def _extract_slices_for_experiment(img_data, experiment):
+    """Extract slice arrays for an experiment (matches vqa_dataset logic)."""
+    from vista_run.utils.utils_inference import normalize_slice
+
+    slices = []
+    if experiment == 'axial_1_image':
+        if len(img_data.shape) > 2:
+            idx = img_data.shape[2] // 2
+            s = img_data[:, :, idx]
+            slices.append(normalize_slice(s))
+    elif experiment == 'all_image':
+        if len(img_data.shape) >= 3:
+            # sagittal, coronal, axial middle
+            sx = img_data.shape[0] // 2
+            sy = img_data.shape[1] // 2
+            sz = img_data.shape[2] // 2
+            slices.append(normalize_slice(img_data[sx, :, :]))
+            slices.append(normalize_slice(img_data[:, sy, :]))
+            slices.append(normalize_slice(img_data[:, :, sz]))
+    elif experiment == 'axial_all_image':
+        if len(img_data.shape) > 2:
+            depth = img_data.shape[2]
+            for i in range(10):
+                pos = i * 0.1
+                idx = min(int(pos * (depth - 1)), depth - 1)
+                slices.append(normalize_slice(img_data[:, :, idx]))
+    elif experiment == 'sagittal_all_image':
+        if len(img_data.shape) > 0:
+            width = img_data.shape[0]
+            for i in range(10):
+                pos = i * 0.1
+                idx = min(int(pos * (width - 1)), width - 1)
+                slices.append(normalize_slice(img_data[idx, :, :]))
+    elif experiment == 'no_timeline':
+        if len(img_data.shape) > 2:
+            depth = img_data.shape[2]
+            for i in range(100):
+                pos = i / 99.0 if 99 else 0.0
+                idx = min(int(pos * (depth - 1)), depth - 1)
+                slices.append(normalize_slice(img_data[:, :, idx]))
+    elif experiment == 'no_report':
+        if len(img_data.shape) > 2:
+            depth = img_data.shape[2]
+            for i in range(50):
+                pos = i / 49.0 if 49 else 0.0
+                idx = min(int(pos * (depth - 1)), depth - 1)
+                slices.append(normalize_slice(img_data[:, :, idx]))
+    return slices
+
+
+def generate_ct_slice_pdfs(base_path='/home/dcunhrya/vista_bench',
+                          config_path='/home/dcunhrya/vista_eval/configs/all_tasks.yaml',
+                          output_dir='figures/ct_example'):
+    """
+    For each CT-inclusive experiment, generate a PDF with slices (small, fit on single page).
+    """
+    try:
+        import nibabel as nib
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+    except ImportError as e:
+        print(f"Skipping CT slice PDFs (missing dependency: {e})")
+        return
+
+    config = load_config(config_path)
+    if not config:
+        return
+    valid_tasks = config.get('tasks', [])
+    use_subsampled = config.get('subsample', True)
+
+    nifti_path = _find_sample_nifti_path(base_path, valid_tasks, use_subsampled)
+    if not nifti_path:
+        print("No existing CT scan found in task CSVs. Skipping CT slice PDFs.")
+        return
+
+    try:
+        img_obj = nib.load(str(nifti_path))
+        img_data = img_obj.get_fdata()
+    except Exception as e:
+        print(f"Failed to load NIfTI {nifti_path}: {e}")
+        return
+
+    output_path_obj = Path(output_dir)
+    output_path_obj.mkdir(parents=True, exist_ok=True)
+    save_path = output_path_obj / 'ct_slices.pdf'
+
+    with PdfPages(str(save_path)) as pdf:
+        for experiment in CT_EXPERIMENTS:
+            slices = _extract_slices_for_experiment(img_data, experiment)
+            if not slices:
+                continue
+
+            n = len(slices)
+            # Choose grid dimensions to fit on single letter page (small subplots)
+            if n <= 3:
+                ncols, nrows = n, 1
+            elif n <= 10:
+                ncols, nrows = 5, 2
+            elif n <= 50:
+                ncols, nrows = 10, 5
+            else:
+                ncols, nrows = 10, 10
+
+            fig, axes = plt.subplots(nrows, ncols, figsize=(11, 8.5))
+            if nrows == 1 and ncols == 1:
+                axes = np.array([[axes]])
+            elif nrows == 1 or ncols == 1:
+                axes = np.atleast_1d(axes).reshape(nrows, ncols)
+
+            for i, ax in enumerate(axes.flat):
+                if i < n:
+                    ax.imshow(slices[i], cmap='gray', aspect='auto')
+                    ax.set_title(f'{i+1}', fontsize=6)
+                ax.axis('off')
+
+            fig.suptitle(f'CT Slices: {experiment} ({n} slices)', fontsize=12, fontweight='bold', y=0.98)
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            pdf.savefig(fig, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+    print(f"  CT slice PDF: {save_path}")
 
 def generate_questions_pdf(results_path='/home/dcunhrya/results', 
                           base_path='/home/dcunhrya/vista_bench',
@@ -322,5 +505,11 @@ def generate_questions_pdf(results_path='/home/dcunhrya/results',
     doc.build(story)
     print(f"\nPDF generated: {output_path}")
 
+
 if __name__ == "__main__":
-    generate_questions_pdf()
+    config_path = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
+    base_path = '/home/dcunhrya/vista_bench'
+    generate_questions_pdf(config_path=config_path)
+    print("\nGenerating CT slice PDFs for each experiment...")
+    generate_ct_slice_pdfs(base_path=base_path, config_path=config_path,
+                          output_dir='/home/dcunhrya/vista_eval/figures/ct_example')
