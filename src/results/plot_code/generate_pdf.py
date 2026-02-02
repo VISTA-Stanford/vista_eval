@@ -353,7 +353,10 @@ def generate_questions_pdf(results_path=None,
     
     # Organize data: [source_folder][task_name][model_name][experiment] = first row data
     structured_data = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
-    
+    # Per-CSV means of unique_events per subtask: [source_folder][task_name] = [mean1, mean2, ...]
+    # Each results CSV contributes its own mean(unique_events); we average those for the subtask
+    unique_events_means = defaultdict(lambda: defaultdict(list))
+
     for file_path in all_result_files:
         relative_parts = file_path.relative_to(results_base).parts
         
@@ -417,7 +420,14 @@ def generate_questions_pdf(results_path=None,
                 'index': first_row.get('index', 'N/A'),
                 'is_correct': is_correct
             }
-            
+
+            # For this specific results CSV: compute mean of unique_events within that CSV
+            if 'unique_events' in df.columns:
+                vals = pd.to_numeric(df['unique_events'], errors='coerce').dropna()
+                if len(vals) > 0:
+                    csv_mean = float(vals.mean())
+                    unique_events_means[source_folder][task_name].append(csv_mean)
+
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
     
@@ -457,7 +467,10 @@ def generate_questions_pdf(results_path=None,
     experiment_style = ParagraphStyle('Experiment', parent=styles['BodyText'], 
                                       leftIndent=50, rightIndent=25, fontSize=9, 
                                       backColor='#f8f9fa', spaceBefore=3, spaceAfter=3)
-    
+    avg_unique_events_style = ParagraphStyle('AvgUniqueEvents', parent=styles['BodyText'],
+                                             leftIndent=20, rightIndent=25, fontSize=10,
+                                             textColor='#7f8c8d', spaceAfter=5)
+
     story.append(Paragraph("VLM Multi-Model Comparison Report", title_style))
     story.append(Spacer(1, 0.2*inch))
     
@@ -469,7 +482,17 @@ def generate_questions_pdf(results_path=None,
         for task_name in sorted(structured_data[source_folder].keys()):
             story.append(Paragraph(f"Subtask: {task_name}", task_style))
             story.append(Spacer(1, 0.05*inch))
-            
+
+            # Average unique events for this subtask (mean of per-CSV means)
+            means_list = unique_events_means[source_folder][task_name]
+            if means_list:
+                avg_unique_events = sum(means_list) / len(means_list)
+                story.append(Paragraph(
+                    f"<b>Average unique events:</b> {avg_unique_events:.2f}",
+                    avg_unique_events_style
+                ))
+                story.append(Spacer(1, 0.05*inch))
+
             # Get the first question and correct answer from any model/experiment
             first_data = None
             for model_name in structured_data[source_folder][task_name].keys():
