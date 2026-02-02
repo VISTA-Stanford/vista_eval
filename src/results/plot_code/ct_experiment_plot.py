@@ -120,36 +120,39 @@ def calculate_accuracy(df, mapping):
         traceback.print_exc()
         return None
 
-def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', base_path='/home/dcunhrya/vista_bench', config_path=None):
+def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcunhrya/vista_bench', config_path=None):
     """
     Generate comparison plots for experiments across models for each task.
-    
+
     Args:
-        results_path: Base path to search for result CSV files
+        results_path: Base path to search for result CSV files (overridden by config paths.results_dir if present)
         base_path: Base path to load task registry for mappings
         config_path: Optional path to YAML config file to check for subsample flag and filter tasks/models
     """
-    results_base = Path(results_path)
-    base_path_obj = Path(base_path)
-    
-    # Load config
+    if config_path is None:
+        config_path = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
+
+    # Load config first to get paths.results_dir
     config = None
     use_subsampled = False
     valid_tasks = None
     valid_models = None
     valid_experiments = None
     experiment_display_mapping = {}
-    
-    if config_path is None:
-        config_path = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
-    
+
     if config_path:
         try:
             import yaml
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
                 use_subsampled = config.get('subsample', False)
-                
+                # Use results_dir from config if present, else fall back to results_path arg
+                config_results_dir = config.get('paths', {}).get('results_dir')
+                if config_results_dir is not None:
+                    results_path = config_results_dir
+                if results_path is None:
+                    results_path = '/home/dcunhrya/results'  # final fallback
+
                 # Extract valid tasks from config
                 tasks_list = config.get('tasks', [])
                 if tasks_list:
@@ -186,7 +189,12 @@ def generate_experiment_comparison_plots(results_path='/home/dcunhrya/results', 
                 experiment_display_mapping = parse_experiment_comments(config_path)
         except Exception as e:
             print(f"Warning: Could not load config from {config_path}: {e}")
-    
+
+    if results_path is None:
+        results_path = '/home/dcunhrya/results'
+    results_base = Path(results_path)
+    base_path_obj = Path(base_path)
+
     if use_subsampled:
         print("Note: Using subsampled CSV files (subsample flag is true)")
     

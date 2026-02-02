@@ -69,10 +69,23 @@ fi
 # Command line arguments can override if needed, but typically not used
 TASK_LIST=""
 
-echo "Starting Inference Orchestrator for $MODEL_COUNT model(s)..."
+# Detect number of GPUs
+GPU_COUNT=$(nvidia-smi -L 2>/dev/null | wc -l)
+if [ -z "$GPU_COUNT" ] || [ "$GPU_COUNT" -lt 1 ]; then
+    GPU_COUNT=1
+fi
+
+echo "Starting Inference Orchestrator for $MODEL_COUNT model(s) on $GPU_COUNT GPU(s)..."
 for idx in $(seq 0 $((MODEL_COUNT - 1))); do
     echo "  Model $((idx + 1)): Type=${MODEL_TYPES[$idx]}, Name=${MODEL_NAMES[$idx]}"
 done
+
+if [ "$GPU_COUNT" -eq 1 ] && [ "$MODEL_COUNT" -gt 1 ]; then
+    echo "Single GPU detected - running $MODEL_COUNT models sequentially"
+    SEQUENTIAL_MODE=1
+else
+    SEQUENTIAL_MODE=0
+fi
 
 if [ -n "$TASK_LIST" ]; then
     echo "Running specific tasks: $TASK_LIST"
@@ -109,22 +122,31 @@ run_model() {
     return $exit_code
 }
 
-# Run models in parallel (background jobs)
-declare -a PIDS
-for idx in $(seq 0 $((MODEL_COUNT - 1))); do
-    run_model $idx "${MODEL_TYPES[$idx]}" "${MODEL_NAMES[$idx]}" &
-    PIDS[$idx]=$!
-done
-
-# Wait for all background jobs to complete
-echo "Waiting for all models to complete..."
+# Run models (parallel if multiple GPUs, sequential if single GPU)
 FAILED_COUNT=0
-for idx in $(seq 0 $((MODEL_COUNT - 1))); do
-    wait ${PIDS[$idx]}
-    if [ $? -ne 0 ]; then
-        FAILED_COUNT=$((FAILED_COUNT + 1))
-    fi
-done
+if [ "$SEQUENTIAL_MODE" -eq 1 ]; then
+    # Single GPU: run each model sequentially, all using GPU 0
+    for idx in $(seq 0 $((MODEL_COUNT - 1))); do
+        run_model 0 "${MODEL_TYPES[$idx]}" "${MODEL_NAMES[$idx]}"
+        if [ $? -ne 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done
+else
+    # Multiple GPUs: run models in parallel (one per GPU)
+    declare -a PIDS
+    for idx in $(seq 0 $((MODEL_COUNT - 1))); do
+        run_model $idx "${MODEL_TYPES[$idx]}" "${MODEL_NAMES[$idx]}" &
+        PIDS[$idx]=$!
+    done
+    echo "Waiting for all models to complete..."
+    for idx in $(seq 0 $((MODEL_COUNT - 1))); do
+        wait ${PIDS[$idx]}
+        if [ $? -ne 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done
+fi
 
 echo ""
 echo "All models completed. Logs available in: $LOG_DIR"

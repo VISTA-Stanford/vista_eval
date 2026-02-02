@@ -100,13 +100,20 @@ def load_config(config_path):
         
         # Extract tasks
         valid_tasks = config.get('tasks', [])
-        
+
+        # Extract paths (results_dir, base_dir)
+        paths = config.get('paths', {})
+        results_dir = paths.get('results_dir')
+        base_dir = paths.get('base_dir')
+
         return {
             'models': valid_models,
             'model_name_mapping': model_name_mapping,
             'experiments': valid_experiments,
             'experiment_display_mapping': experiment_display_mapping,
-            'tasks': valid_tasks
+            'tasks': valid_tasks,
+            'results_dir': results_dir,
+            'base_dir': base_dir
         }
     except Exception as e:
         print(f"Error loading config: {e}")
@@ -295,23 +302,41 @@ def generate_ct_slice_pdfs(base_path='/home/dcunhrya/vista_bench',
 
     print(f"  CT slice PDF: {save_path}")
 
-def generate_questions_pdf(results_path='/home/dcunhrya/results', 
+def generate_questions_pdf(results_path=None,
                           base_path='/home/dcunhrya/vista_bench',
                           config_path='/home/dcunhrya/vista_eval/configs/all_tasks.yaml',
                           output_path='figures/questions_responses.pdf'):
     """
     Generate PDF with first question from each subtask, showing all model responses across experiments.
     Structure: Task -> Subtask -> Question + Correct Answer -> Model -> Experiment responses
+
+    Args:
+        results_path: Base path to search for result CSV files (overridden by config paths.results_dir if present)
+        base_path: Base path to load task registry for mappings
+        config_path: Path to YAML config file
+        output_path: Output PDF path
     """
-    results_base = Path(results_path)
-    base_path_obj = Path(base_path)
-    
-    # Load config
+    # Load config first to get paths.results_dir
     config = load_config(config_path)
     if not config:
         print("Failed to load config. Exiting.")
         return
-    
+
+    # Use results_dir from config if present, else fall back to results_path arg
+    config_results_dir = config.get('results_dir')
+    if config_results_dir is not None:
+        results_path = config_results_dir
+    if results_path is None:
+        results_path = '/home/dcunhrya/results'
+
+    # Use base_dir from config if present, else fall back to base_path arg
+    config_base_dir = config.get('base_dir')
+    if config_base_dir is not None:
+        base_path = config_base_dir
+
+    results_base = Path(results_path)
+    base_path_obj = Path(base_path)
+
     valid_models = config['models']
     model_name_mapping = config['model_name_mapping']
     valid_experiments = config['experiments']

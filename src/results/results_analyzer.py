@@ -77,9 +77,21 @@ def _extract_answer_candidates(text):
         for boxed in _extract_boxed(s):
             add(boxed)
         for m in re.finditer(r'<answer>(.*?)</answer>', s, re.DOTALL | re.IGNORECASE):
-            add(m.group(1))
+            if m.group(1).strip():
+                add(m.group(1))
+            else:
+                # Empty tags: <answer></answer> No - add text right after closing tag
+                rest = s[m.end():].strip()
+                if rest:
+                    add(rest)
         for m in re.finditer(r'<label>(.*?)</label>', s, re.DOTALL | re.IGNORECASE):
-            add(m.group(1))
+            if m.group(1).strip():
+                add(m.group(1))
+            else:
+                # Empty tags: <label></label> No - add text right after closing tag
+                rest = s[m.end():].strip()
+                if rest:
+                    add(rest)
         # Extract content from angle brackets like <Yes> or <"Yes"> (but not <answer>/<label> tags)
         # Pattern: < followed by optional quote, content, optional quote, >
         # Handles: <Yes>, <"Yes">, <'Yes'>, <Yes, No>
@@ -94,6 +106,11 @@ def _extract_answer_candidates(text):
                     add(content)
 
     collect_from(text)
+
+    # Explicit handling for <explanation> | answer format - add the answer after "> |"
+    pipe_after_angle = re.search(r'>\s*\|\s*(.+)$', text, re.DOTALL)
+    if pipe_after_angle:
+        add(pipe_after_angle.group(1))
 
     if '|' in text:
         # Split on the last occurrence of '|'
@@ -140,7 +157,7 @@ def _extract_answer_candidates(text):
 def _extract_answer(text):
     """
     Extract the primary answer from the model's raw output (for display / cleaned_response).
-    Priority: \\boxed{} > <answer> > <label> > pipe last segment > angle brackets <Yes> or <"Yes"> > last word/phrase > full text.
+    Priority: \\boxed{} > <answer> > <label> > <explanation> | answer > pipe last segment > angle brackets <Yes> or <"Yes"> > last word/phrase > full text.
     """
     if pd.isna(text) or not str(text).strip():
         return ""
@@ -150,12 +167,29 @@ def _extract_answer(text):
         return _clean_extracted_answer(boxed[-1])
     m = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
     if m:
-        return _clean_extracted_answer(m.group(1))
+        content = m.group(1).strip()
+        if content:
+            return _clean_extracted_answer(content)
+        # Empty tags: <answer></answer> No - answer is right after the closing tag
+        after = re.search(r'</answer>\s*(.+)$', text, re.DOTALL | re.IGNORECASE)
+        if after:
+            return _clean_extracted_answer(after.group(1))
     m = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        content = m.group(1).strip()
+        if content:
+            return _clean_extracted_answer(content)
+        # Empty tags: <label></label> No - answer is right after the closing tag
+        after = re.search(r'</label>\s*(.+)$', text, re.DOTALL | re.IGNORECASE)
+        if after:
+            return _clean_extracted_answer(after.group(1))
+
+    # Explicit handling for <explanation> | answer format (reasoning in angle brackets, then pipe, then answer)
+    m = re.search(r'>\s*\|\s*(.+)$', text, re.DOTALL)
     if m:
         return _clean_extracted_answer(m.group(1))
     
-    # Check for pipes FIRST (before angle brackets) to handle cases like "<explanation> | No"
+    # Check for pipes (before angle brackets) to handle cases like "<explanation> | No"
     if '|' in text:
         # Split on the last occurrence of '|'
         parts = text.rsplit('|', 1)
