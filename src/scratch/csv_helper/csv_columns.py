@@ -7,4 +7,4 @@ print("Num columns:", len(df.columns))
 print("Columns:")
 for c in df.columns:
     print("-", c)
-# print(df['local_path'].tolist())
+# print(df['split'].unique())

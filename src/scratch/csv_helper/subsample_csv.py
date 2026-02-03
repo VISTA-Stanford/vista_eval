@@ -78,8 +78,11 @@ def load_task_mappings(valid_tasks_json_path):
             if task_source_csv:
                 task_table_map[task_name] = task_source_csv
             
-            # Find all label values that map to "Insufficient follow-up or missing data"
+            # Exclude: (1) label -1 always, (2) any label that maps to "Insufficient follow-up or missing data"
             excluded_labels = set()
+            # Never use label -1
+            excluded_labels.add(-1)
+            excluded_labels.add("-1")
             for label_str, mapped_value in mapping.items():
                 if mapped_value == "Insufficient follow-up or missing data":
                     # Add both string and numeric representations for flexible matching
