@@ -63,8 +63,8 @@ def main(
 
 
 if __name__ == "__main__":
-    CONFIG_PATH = "/home/dcunhrya/vista_eval/configs/all_tasks.yaml"
-    VALID_TASKS_JSON_PATH = "/home/dcunhrya/vista_bench/tasks/valid_tasks.json"
+    CONFIG_PATH = "/home/rdcunha/vista_project/vista_eval_vlm/configs/all_tasks.yaml"
+    VALID_TASKS_JSON_PATH = "/home/rdcunha/vista_project/vista_bench/tasks/valid_tasks.json"
     # Output under vista_eval/eval/data_stats/
     OUTPUT_PATH = Path(__file__).resolve().parents[3] / "figures" / "data_stats" / "person_id_subsampled.csv"
 

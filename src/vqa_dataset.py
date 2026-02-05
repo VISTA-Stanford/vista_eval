@@ -8,6 +8,37 @@ import io
 import tempfile
 from vista_run.utils.utils_inference import pad_to_512, pad_to_size, normalize_slice
 
+# Bucket prefix for NIfTI files (same as download_subsampled_ct / weill)
+DEFAULT_NIFTI_BUCKET_PREFIX = "chaudhari_lab/ct_data/ct_scans/vista/nov25"
+
+
+def _nifti_path_to_blob_and_filename(nifti_path: str, bucket_name: str = "su-vista-uscentral1", prefix: str = DEFAULT_NIFTI_BUCKET_PREFIX):
+    """
+    Normalize nifti_path (same logic as download_subsampled_ct) to blob-relative path and filename.
+    Returns (blob_path, filename) for GCP blob and for local ct_dir lookup.
+    """
+    path_str = str(nifti_path).strip()
+    if path_str.startswith("/mnt/"):
+        path_str = path_str[5:]
+    if path_str.startswith(f"{bucket_name}/"):
+        path_str = path_str[len(bucket_name) + 1:]
+    if path_str.startswith(prefix):
+        blob_path = path_str
+        filename = path_str.split("/")[-1]
+        return blob_path, filename
+    parts = path_str.split("/")
+    filename = parts[-1]
+    if not filename.endswith(".nii.gz"):
+        if len(parts) >= 2:
+            filename_no_ext = parts[-1].replace(".zip", "")
+            bucket_filename = f"{parts[-2]}__{filename_no_ext}.nii.gz"
+        else:
+            bucket_filename = filename if filename.endswith(".nii.gz") else f"{filename}.nii.gz"
+    else:
+        bucket_filename = filename
+    blob_path = f"{prefix}/{bucket_filename}"
+    return blob_path, bucket_filename
+
 def norm(ct_vol: np.ndarray, min_val: float, max_val: float) -> np.ndarray:
     """Window and normalize CT imaging Houndsfield values to values 0 - 255."""
     ct_vol = np.clip(ct_vol, min_val, max_val)  # Clip the imaging value range
@@ -26,15 +57,16 @@ def window(ct_vol: np.ndarray) -> np.ndarray:
     return np.stack([norm(ct_vol, clip[0], clip[1]) for clip in window_clips], axis=-1)
 
 class PromptDataset(Dataset):
-    def __init__(self, df, prompt_col='dynamic_prompt', add_options=False, experiment='axial_1_image', storage_client=None, model_type=None):
+    def __init__(self, df, prompt_col='dynamic_prompt', add_options=False, experiment='axial_1_image', storage_client=None, model_type=None, ct_dir=None):
         """
         Args:
             df: Dataframe containing the data.
             prompt_col: The column name to use for the text prompt.
             add_options: Whether to append options to the prompt.
             experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', or 'no_report'
-            storage_client: GCP Storage client for loading NIfTI files from bucket
-            model_type: Model type string (e.g., 'gemma3') to determine preprocessing
+            storage_client: GCP Storage client for loading NIfTI files from bucket (used when file not under ct_dir).
+            model_type: Model type string (e.g., 'gemma3') to determine preprocessing.
+            ct_dir: Optional path from config paths.ct_dir. If set and nifti_path (split to filename) exists under ct_dir, load from disk; else use GCP.
         """
         self.df = df.reset_index(drop=True)
         self.prompt_col = prompt_col
@@ -44,7 +76,8 @@ class PromptDataset(Dataset):
         self.bucket_name = 'su-vista-uscentral1'
         self.model_type = model_type
         self.is_gemma = model_type is not None and 'gemma' in model_type.lower()
-        
+        self.ct_dir = Path(ct_dir) if ct_dir else None
+
         # Determine image size based on model type
         self.target_size = 448 if self.is_gemma else 512
     
@@ -103,148 +136,125 @@ class PromptDataset(Dataset):
                 except Exception as e:
                     print(f"Error loading image at {image_path}: {e}")
             
-            # If no image from image_path, check for nifti_path (NIfTI files in GCP bucket)
+            # If no image from image_path, check for nifti_path (local ct_dir or GCP bucket)
             if img is None:
                 nifti_path = row.get('nifti_path', None)
-                if pd.notna(nifti_path) and isinstance(nifti_path, str) and self.storage_client is not None:
+                if pd.notna(nifti_path) and isinstance(nifti_path, str):
                     try:
-                        # Remove '/mnt/' prefix if present
-                        if nifti_path.startswith('/mnt/'):
-                            nifti_path = nifti_path[5:]  # Remove '/mnt/'
-                        
-                        # Remove bucket name prefix if present (path should be relative to bucket)
-                        if nifti_path.startswith(f'{self.bucket_name}/'):
-                            nifti_path = nifti_path[len(self.bucket_name) + 1:]  # Remove 'bucket_name/'
-                        
-                        # Load NIfTI file from GCP bucket
                         import nibabel as nib
-                        bucket = self.storage_client.bucket(self.bucket_name)
-                        blob = bucket.blob(nifti_path)
-                        
-                        # Download to memory
-                        nifti_bytes = blob.download_as_bytes()
-                        
-                        # Load from bytes using nibabel
-                        # Use a temporary file since nibabel.load() may not accept BytesIO directly
-                        with tempfile.NamedTemporaryFile(suffix='.nii.gz', delete=False) as tmp_file:
-                            tmp_file.write(nifti_bytes)
-                            tmp_file_path = tmp_file.name
-                        
-                        try:
-                            img_obj = nib.load(tmp_file_path)
+                        blob_path, filename = _nifti_path_to_blob_and_filename(
+                            nifti_path, bucket_name=self.bucket_name
+                        )
+                        local_path = self.ct_dir / filename if self.ct_dir else None
+                        use_local = local_path is not None and local_path.exists()
+
+                        if use_local:
+                            img_obj = nib.load(str(local_path))
                             img_data = img_obj.get_fdata()
-                        finally:
-                            # Clean up temporary file
-                            if os.path.exists(tmp_file_path):
-                                os.unlink(tmp_file_path)
-                        
-                        # Handle different experiment types
-                        if self.experiment == 'axial_1_image':
-                            # Extract axial middle slice (3rd dimension)
-                            axial_middle_index = img_data.shape[2] // 2
-                            axial_slice = img_data[:, :, axial_middle_index]
-                            img = self._process_ct_slice(axial_slice)
-                            # print(f"[IMAGE] Using NIfTI axial_1_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
-                            
-                        elif self.experiment == 'all_image':
-                            # Extract middle index of each of the 3 dimensions
-                            img_list = []
-                            # Dimension 0 (sagittal)
-                            if len(img_data.shape) > 0:
-                                sagittal_middle = img_data.shape[0] // 2
-                                sagittal_slice = img_data[sagittal_middle, :, :]
-                                img_list.append(self._process_ct_slice(sagittal_slice))
-                            # Dimension 1 (coronal)
-                            if len(img_data.shape) > 1:
-                                coronal_middle = img_data.shape[1] // 2
-                                coronal_slice = img_data[:, coronal_middle, :]
-                                img_list.append(self._process_ct_slice(coronal_slice))
-                            # Dimension 2 (axial)
-                            if len(img_data.shape) > 2:
-                                axial_middle = img_data.shape[2] // 2
-                                axial_slice = img_data[:, :, axial_middle]
-                                img_list.append(self._process_ct_slice(axial_slice))
-                            img = img_list if img_list else None
-                            # print(f"[IMAGE] Using NIfTI all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
-                            
-                        elif self.experiment == 'axial_all_image':
-                            # Extract 10 images at 0, 0.1, 0.2, ... 1.0 * len(image.shape[2])
-                            # Using 0.0, 0.1, ..., 0.9 to get 10 evenly spaced slices
-                            if len(img_data.shape) > 2:
-                                depth = img_data.shape[2]
+                        elif self.storage_client is not None:
+                            # Load NIfTI file from GCP bucket
+                            bucket = self.storage_client.bucket(self.bucket_name)
+                            blob = bucket.blob(blob_path)
+                            nifti_bytes = blob.download_as_bytes()
+                            with tempfile.NamedTemporaryFile(suffix='.nii.gz', delete=False) as tmp_file:
+                                tmp_file.write(nifti_bytes)
+                                tmp_file_path = tmp_file.name
+                            try:
+                                img_obj = nib.load(tmp_file_path)
+                                img_data = img_obj.get_fdata()
+                            finally:
+                                if os.path.exists(tmp_file_path):
+                                    os.unlink(tmp_file_path)
+                        else:
+                            img_data = None
+
+                        if img_data is not None:
+                            # Handle different experiment types
+                            if self.experiment == 'axial_1_image':
+                                # Extract axial middle slice (3rd dimension)
+                                axial_middle_index = img_data.shape[2] // 2
+                                axial_slice = img_data[:, :, axial_middle_index]
+                                img = self._process_ct_slice(axial_slice)
+                            elif self.experiment == 'all_image':
+                                # Extract middle index of each of the 3 dimensions
                                 img_list = []
-                                for i in range(10):  # 10 total images
-                                    # Calculate position: 0.0, 0.1, 0.2, ..., 0.9
-                                    position = i * 0.1
-                                    index = int(position * (depth - 1))
-                                    if index >= depth:
-                                        index = depth - 1
-                                    axial_slice = img_data[:, :, index]
-                                    img_list.append(self._process_ct_slice(axial_slice))
-                                img = img_list
-                                # print(f"[IMAGE] Using NIfTI axial_all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
-                            else:
-                                img = None
-                                
-                        elif self.experiment == 'sagittal_all_image':
-                            # Extract 10 images at 0, 0.1, 0.2, ... 1.0 * len(image.shape[0])
-                            # Using 0.0, 0.1, ..., 0.9 to get 10 evenly spaced slices
-                            if len(img_data.shape) > 0:
-                                width = img_data.shape[0]
-                                img_list = []
-                                for i in range(10):  # 10 total images
-                                    # Calculate position: 0.0, 0.1, 0.2, ..., 0.9
-                                    position = i * 0.1
-                                    index = int(position * (width - 1))
-                                    if index >= width:
-                                        index = width - 1
-                                    sagittal_slice = img_data[index, :, :]
+                                if len(img_data.shape) > 0:
+                                    sagittal_middle = img_data.shape[0] // 2
+                                    sagittal_slice = img_data[sagittal_middle, :, :]
                                     img_list.append(self._process_ct_slice(sagittal_slice))
-                                img = img_list
-                                # print(f"[IMAGE] Using NIfTI sagittal_all_image from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
-                            else:
-                                img = None
-                                
-                        elif self.experiment == 'no_timeline':
-                            # Extract 100 evenly spaced axial slices (3rd dimension)
-                            if len(img_data.shape) > 2:
-                                depth = img_data.shape[2]
-                                img_list = []
-                                num_slices = 100
-                                for i in range(num_slices):
-                                    if num_slices > 1:
-                                        position = i / (num_slices - 1)
-                                    else:
-                                        position = 0.0
-                                    index = int(position * (depth - 1))
-                                    if index >= depth:
-                                        index = depth - 1
-                                    axial_slice = img_data[:, :, index]
+                                if len(img_data.shape) > 1:
+                                    coronal_middle = img_data.shape[1] // 2
+                                    coronal_slice = img_data[:, coronal_middle, :]
+                                    img_list.append(self._process_ct_slice(coronal_slice))
+                                if len(img_data.shape) > 2:
+                                    axial_middle = img_data.shape[2] // 2
+                                    axial_slice = img_data[:, :, axial_middle]
                                     img_list.append(self._process_ct_slice(axial_slice))
-                                img = img_list
-                            else:
-                                img = None
-                        elif self.experiment == 'no_report':
-                            # Extract 50 evenly spaced axial slices (3rd dimension)
-                            if len(img_data.shape) > 2:
-                                depth = img_data.shape[2]
-                                img_list = []
-                                num_slices = 50
-                                for i in range(num_slices):
-                                    # Calculate position: 0.0, 1/(num_slices-1), 2/(num_slices-1), ..., 1.0
-                                    if num_slices > 1:
-                                        position = i / (num_slices - 1)
-                                    else:
-                                        position = 0.0
-                                    index = int(position * (depth - 1))
-                                    if index >= depth:
-                                        index = depth - 1
-                                    axial_slice = img_data[:, :, index]
-                                    img_list.append(self._process_ct_slice(axial_slice))
-                                img = img_list
-                                # print(f"[IMAGE] Using NIfTI no_report (50 axial slices) from nifti_path: {nifti_path} (index: {row.get('index', idx)})")
-                            else:
-                                img = None
+                                img = img_list if img_list else None
+                            elif self.experiment == 'axial_all_image':
+                                if len(img_data.shape) > 2:
+                                    depth = img_data.shape[2]
+                                    img_list = []
+                                    for i in range(10):
+                                        position = i * 0.1
+                                        index = int(position * (depth - 1))
+                                        if index >= depth:
+                                            index = depth - 1
+                                        axial_slice = img_data[:, :, index]
+                                        img_list.append(self._process_ct_slice(axial_slice))
+                                    img = img_list
+                                else:
+                                    img = None
+                            elif self.experiment == 'sagittal_all_image':
+                                if len(img_data.shape) > 0:
+                                    width = img_data.shape[0]
+                                    img_list = []
+                                    for i in range(10):
+                                        position = i * 0.1
+                                        index = int(position * (width - 1))
+                                        if index >= width:
+                                            index = width - 1
+                                        sagittal_slice = img_data[index, :, :]
+                                        img_list.append(self._process_ct_slice(sagittal_slice))
+                                    img = img_list
+                                else:
+                                    img = None
+                            elif self.experiment == 'no_timeline':
+                                if len(img_data.shape) > 2:
+                                    depth = img_data.shape[2]
+                                    img_list = []
+                                    num_slices = 100
+                                    for i in range(num_slices):
+                                        if num_slices > 1:
+                                            position = i / (num_slices - 1)
+                                        else:
+                                            position = 0.0
+                                        index = int(position * (depth - 1))
+                                        if index >= depth:
+                                            index = depth - 1
+                                        axial_slice = img_data[:, :, index]
+                                        img_list.append(self._process_ct_slice(axial_slice))
+                                    img = img_list
+                                else:
+                                    img = None
+                            elif self.experiment == 'no_report':
+                                if len(img_data.shape) > 2:
+                                    depth = img_data.shape[2]
+                                    img_list = []
+                                    num_slices = 50
+                                    for i in range(num_slices):
+                                        if num_slices > 1:
+                                            position = i / (num_slices - 1)
+                                        else:
+                                            position = 0.0
+                                        index = int(position * (depth - 1))
+                                        if index >= depth:
+                                            index = depth - 1
+                                        axial_slice = img_data[:, :, index]
+                                        img_list.append(self._process_ct_slice(axial_slice))
+                                    img = img_list
+                                else:
+                                    img = None
                     except Exception as e:
                         print(f"Error loading NIfTI from nifti_path {nifti_path}: {e}")
                         # Continue with text-only if image loading fails

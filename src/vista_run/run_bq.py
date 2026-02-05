@@ -10,9 +10,9 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from google.cloud import bigquery
 from google.cloud import storage
-import meds_reader
-from meds_tools import patient_timeline
-from meds2text.ontology import OntologyDescriptionLookupTable
+# import meds_reader
+# from meds_tools import patient_timeline
+# from meds2text.ontology import OntologyDescriptionLookupTable
 
 from vqa_dataset import PromptDataset, prompt_collate
 from models import load_model_adapter
@@ -50,15 +50,15 @@ class TaskOrchestrator:
         self.storage_client = storage.Client(project=self.project_id)
 
         # 4.5. Initialize Meds Database and Ontology Lookup
-        meds_db_path = self.base_path / "thoracic_cohort_meds" / "vista_thoracic_cohort_v0_db"
-        ontology_path = self.base_path / "thoracic_cohort_meds" / "athena_omop_ontologies"
+        # meds_db_path = self.base_path / "thoracic_cohort_meds" / "vista_thoracic_cohort_v0_db"
+        # ontology_path = self.base_path / "thoracic_cohort_meds" / "athena_omop_ontologies"
         
-        print(f"    Initializing meds database from: {meds_db_path}")
-        print(f"    Initializing ontology lookup from: {ontology_path}")
+        # print(f"    Initializing meds database from: {meds_db_path}")
+        # print(f"    Initializing ontology lookup from: {ontology_path}")
         
-        self.lookup = OntologyDescriptionLookupTable()
-        self.lookup.load(str(ontology_path))
-        self.meds_database = meds_reader.SubjectDatabase(str(meds_db_path))
+        # self.lookup = OntologyDescriptionLookupTable()
+        # self.lookup.load(str(ontology_path))
+        # self.meds_database = meds_reader.SubjectDatabase(str(meds_db_path))
 
         # 5. Initialize Model
         self.adapter = load_model_adapter(
@@ -114,22 +114,22 @@ class TaskOrchestrator:
         # if end_date is None:
         #     return f"No end_date found for subject_id {subject_id}."
         
-        try:
-            # Fetch patient timeline
-            df_patient = patient_timeline.get_described_events_window(
-                database=self.meds_database,
-                lookup_table=self.lookup,
-                subject_id=subject_id,
-                start_time=start_date if start_date else None,
-                end_time=end_date
-            )
+        # try:
+        #     # Fetch patient timeline
+        #     df_patient = patient_timeline.get_described_events_window(
+        #         database=self.meds_database,
+        #         lookup_table=self.lookup,
+        #         subject_id=subject_id,
+        #         start_time=start_date if start_date else None,
+        #         end_time=end_date
+        #     )
             
-            # Convert to string format
-            patient_string = patient_timeline.get_llm_event_string(df_patient, include_text=True)
-            return patient_string if patient_string else "No clinical events found for this period."
+        #     # Convert to string format
+        #     patient_string = patient_timeline.get_llm_event_string(df_patient, include_text=True)
+        #     return patient_string if patient_string else "No clinical events found for this period."
             
-        except Exception as e:
-            return f"Error fetching timeline for subject_id {subject_id}: {str(e)}"
+        # except Exception as e:
+        #     return f"Error fetching timeline for subject_id {subject_id}: {str(e)}"
 
     def count_unique_event_dates(self, timeline_text):
         """
@@ -195,8 +195,10 @@ class TaskOrchestrator:
             return text_str
         
         # Keep first 4 rows (first unique event)
-        first_4_rows = '\n'.join(lines[:4])
-        remaining_text = '\n'.join(lines[4:])
+        # first_4_rows = '\n'.join(lines[:4])
+        # remaining_text = '\n'.join(lines[4:])
+        first_4_rows = ''
+        remaining_text = text_str
         
         if truncation_config is None:
             # Default: no truncation, but still preserve first 4 rows
@@ -226,7 +228,7 @@ class TaskOrchestrator:
             # Get safety max_chars limit to prevent token overflow
             # Rough estimate: 1 token ≈ 4 characters, but can vary
             # Model max is 14588 tokens, so we use ~30000 chars to be safe (allows for prompt overhead)
-            safety_max_chars = truncation_config.get('max_chars', 80000)
+            safety_max_chars = truncation_config.get('max_chars', 150000)
             
             # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
             # Find all event start positions and extract dates
@@ -341,7 +343,7 @@ class TaskOrchestrator:
         # For each task: load data (different CSV for no_report), then run all experiments
         for task_info in tasks_to_run:
             task_name = task_info['task_name']
-            # no_report uses _subsampled_no_report.csv; other experiments use normal CSV
+            # no_report uses _subsampled_no_img_report.csv; other experiments use normal CSV
             needs_no_report = 'no_report' in experiments
             needs_normal = any(e != 'no_report' for e in experiments)
             loaded_normal = self._load_task_data(task_info, use_no_report_csv=False) if needs_normal else None
@@ -362,7 +364,7 @@ class TaskOrchestrator:
         Query BigQuery once per task and merge with local CSV timelines.
         Returns (df, timeline_col, source_csv) or None on failure.
         Same data is reused for all experiments.
-        When use_no_report_csv=True, loads from *_subsampled_no_report.csv (for no_report experiment).
+        When use_no_report_csv=True, loads from *_subsampled_no_img_report.csv (for no_report experiment).
         """
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
@@ -404,7 +406,7 @@ class TaskOrchestrator:
         # --- LOAD PATIENT TIMELINES FROM LOCAL CSV ---
         use_subsampled = self.cfg.get('subsample', False)
         if use_no_report_csv and use_subsampled:
-            csv_filename = f"{task_name}_subsampled_no_report.csv"
+            csv_filename = f"{task_name}_subsampled_no_img_report.csv"
         else:
             csv_filename = f"{task_name}_subsampled.csv" if use_subsampled else f"{task_name}.csv"
         csv_path = self.base_path / source_csv / csv_filename
@@ -474,7 +476,8 @@ class TaskOrchestrator:
         else:
             df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
-        dataset = PromptDataset(df=df_exp, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type) 
+        ct_dir = self.cfg.get('paths', {}).get('ct_dir')
+        dataset = PromptDataset(df=df_exp, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type, ct_dir=ct_dir) 
         loader = DataLoader(
             dataset,
             batch_size=self.cfg['runtime']['batch_size'],

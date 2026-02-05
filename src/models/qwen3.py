@@ -30,7 +30,7 @@ class Qwen3Adapter(BaseVLMAdapter):
             mm_processor_cache_gb=0,
             
             # 4. Context Safety
-            max_model_len=50000,
+            max_model_len=100000,
         )
         
         # Load processor for chat template formatting

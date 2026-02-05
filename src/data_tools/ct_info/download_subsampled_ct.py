@@ -21,12 +21,12 @@ def load_tasks_from_config(config_path):
         return set()
 
 
-def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
+def download_ct_scans(base_path='/home/rdcunha/vista_project/vista_bench',
                       bucket_name='su-vista-uscentral1',
                       prefix='chaudhari_lab/ct_data/ct_scans/vista/nov25',
                       dry_run=True,
                       config_path=None,
-                      download_base_dir='/home/dcunhrya/downloaded_ct_scans',
+                      download_base_dir='/home/rdcunha/vista_project/downloaded_ct_scans',
                       file_suffix='_subsampled'):
     """
     Checks or downloads NIfTI files from GCP, reporting Task and Person ID.
@@ -87,12 +87,16 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
             # Read CSV file
             df = pd.read_csv(csv_file, sep=None, engine='python', on_bad_lines='warn')
             
-            # Check for required columns
+            # Check for required columns - prefer nifti_path, fallback to local_path
+            nifti_path_col = next((c for c in df.columns if c.lower() == 'nifti_path'), None)
             local_path_col = next((c for c in df.columns if c.lower() == 'local_path'), None)
             person_id_col = next((c for c in df.columns if c.lower() in ['person_id', 'patient_id']), None)
             
-            if not local_path_col:
-                print(f"  [SKIP] {csv_file.name}: Missing 'local_path' column")
+            # Use nifti_path if available, otherwise fallback to local_path
+            path_col = nifti_path_col if nifti_path_col else local_path_col
+            
+            if not path_col:
+                print(f"  [SKIP] {csv_file.name}: Missing 'nifti_path' or 'local_path' column")
                 continue
             
             if not person_id_col:
@@ -100,8 +104,8 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
                 continue
             
             # Select and rename columns
-            df_selected = df[[local_path_col, person_id_col]].copy()
-            df_selected = df_selected.rename(columns={local_path_col: 'path', person_id_col: 'person_id'})
+            df_selected = df[[path_col, person_id_col]].copy()
+            df_selected = df_selected.rename(columns={path_col: 'path', person_id_col: 'person_id'})
             df_selected['task'] = task_name
             
             # Filter valid paths only
@@ -136,19 +140,46 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
         print(f"Files will be downloaded to: {download_base_dir}")
 
     for _, row in unique_df.iterrows():
-        local_path_str = row['path']
+        path_str = row['path']
         task_name = row['task']
         person_id = row['person_id']
         
         try:
-            # 1. Filename Transformation Logic
-            parts = local_path_str.split('/')
-            filename_no_ext = parts[-1].replace('.zip', '')
-            bucket_filename = f"{parts[-2]}__{filename_no_ext}.nii.gz"
+            # 1. Path Normalization - Handle different nifti_path formats
+            # Remove /mnt/ prefix if present
+            if path_str.startswith('/mnt/'):
+                path_str = path_str[5:]
             
-            blob_path = f"{prefix}/{bucket_filename}"
+            # Remove bucket name prefix if present
+            if path_str.startswith(f'{bucket_name}/'):
+                path_str = path_str[len(bucket_name) + 1:]
             
-            # 2. Local Path Setup - Use bucket structure instead of local_path structure
+            # Check if path_str is already a bucket-relative path (contains prefix)
+            if path_str.startswith(prefix):
+                # Already a full bucket path, use it directly
+                blob_path = path_str
+                # Extract filename for local download path
+                bucket_filename = path_str.split('/')[-1]
+            else:
+                # Extract filename from path (handles both local paths and just filenames)
+                parts = path_str.split('/')
+                filename = parts[-1]
+                
+                # If filename doesn't have .nii.gz extension, construct it from parts
+                if not filename.endswith('.nii.gz'):
+                    # Assume format: {study_uid}__{series_uid}.nii.gz or construct from path
+                    if len(parts) >= 2:
+                        filename_no_ext = parts[-1].replace('.zip', '')
+                        bucket_filename = f"{parts[-2]}__{filename_no_ext}.nii.gz"
+                    else:
+                        # Just filename, assume it's already correct or needs .nii.gz
+                        bucket_filename = filename if filename.endswith('.nii.gz') else f"{filename}.nii.gz"
+                else:
+                    bucket_filename = filename
+                
+                blob_path = f"{prefix}/{bucket_filename}"
+            
+            # 2. Local Path Setup - Use bucket structure
             # Construct path as: download_base_dir/prefix/bucket_filename
             local_download_path = download_base / prefix / bucket_filename
 
@@ -177,7 +208,7 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
                 print(f"  [MISSING] {blob_path} (Task: {task_name}, ID: {person_id})")
 
         except Exception as e:
-            print(f"  [ERROR] Failed to process {local_path_str}: {e}")
+            print(f"  [ERROR] Failed to process {path_str}: {e}")
 
     # 4. Final Summary
     print("\n" + "="*40)
@@ -194,16 +225,12 @@ def download_ct_scans(base_path='/home/dcunhrya/vista_bench',
     print("="*40)
 
 if __name__ == "__main__":
-    # Toggle dry_run to False when you are ready to pull the data
-    # Option 1: Process all CSVs with default suffix '_subsampled' (default behavior)
-    # download_ct_scans(dry_run=True)
-    
-    # Option 2: Filter by tasks from YAML config with default '_subsampled' suffix
-    # BASE_PATH = "/home/dcunhrya/vista_bench"
-    # CONFIG_PATH = "/home/dcunhrya/vista_eval/configs/all_tasks.yaml"
-    # download_ct_scans(base_path=BASE_PATH, dry_run=True, config_path=CONFIG_PATH)
-    
-    # Option 3: Use '_all_ct' suffix instead
-    BASE_PATH = "/home/dcunhrya/vista_bench"
-    CONFIG_PATH = "/home/dcunhrya/vista_eval/configs/all_tasks.yaml"
-    download_ct_scans(base_path=BASE_PATH, dry_run=True, config_path=CONFIG_PATH, file_suffix='_all_ct')
+    # Download all CT scans from nifti_path in _subsampled CSVs chosen from config
+    BASE_PATH = "/home/rdcunha/vista_project/vista_bench"
+    CONFIG_PATH = "/home/rdcunha/vista_project/vista_eval_vlm/configs/all_tasks.yaml"
+    download_ct_scans(
+        base_path=BASE_PATH, 
+        dry_run=False,  # Set to False to actually download
+        config_path=CONFIG_PATH, 
+        file_suffix='_subsampled'
+    )

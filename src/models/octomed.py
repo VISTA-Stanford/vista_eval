@@ -107,7 +107,7 @@ class OctoMedAdapter(BaseVLMAdapter):
             enable_prefix_caching=False,
             mm_processor_cache_gb=0,
             limit_mm_per_prompt={"image": 100, "video": 0}, 
-            max_model_len=52000,
+            max_model_len=100000,
         )
         
         # Load processor for chat template formatting
