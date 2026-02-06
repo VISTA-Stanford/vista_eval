@@ -1,90 +1,20 @@
-"""
-Add a 'report' column to _subsampled_no_img_report CSVs by:
-- Loading tasks from config (all_tasks.yaml)
-- For each task, reading the _subsampled_no_img_report CSV
-- When '_accession_number' is present: query BigQuery 'note' for note_id and note_text
-  (person_id + _accession_number), then format note_text the same way text_value is
-  formatted in get_llm_event_string (NOTE: clean_text) and add to the 'report' column.
-"""
+# """
+# Add a 'report' column to _subsampled_no_img_report CSVs by:
+# - Loading tasks from config (all_tasks.yaml)
+# - For each task, reading the _subsampled_no_img_report CSV
+# - When '_accession_number' is present: query BigQuery 'note' for note_id and note_text
+#   (person_id + _accession_number), then format note_text the same way text_value is
+#   formatted in get_llm_event_string (NOTE: clean_text) and add to the 'report' column.
+# """
 
 from pathlib import Path
 
 import pandas as pd
 from google.cloud import bigquery
 
-try:
-    from .remove_imaging_report import load_tasks_and_base_dir, load_task_source_csv
-except ImportError:
-    from remove_imaging_report import load_tasks_and_base_dir, load_task_source_csv
-
-
-# BigQuery dataset and table for note
-BQ_DATASET = "oncology_omop54_confidential_irb76049_nov2025"
-BQ_NOTE_TABLE = "note"
-
-
-def get_notes_from_bq(
-    bq_client: bigquery.Client,
-    person_id: int,
-    accession_number: str,
-    dataset: str = BQ_DATASET,
-    table: str = BQ_NOTE_TABLE,
-) -> pd.DataFrame:
-    """
-    Query BigQuery 'note' for note_id and note_text matching person_id and _accession_number.
-    Returns a DataFrame with columns note_id, note_text (may be multiple rows).
-    """
-    if pd.isna(person_id) or pd.isna(accession_number) or accession_number == "":
-        return pd.DataFrame(columns=["note_id", "note_text"])
-    query = f"""
-    SELECT note_id, note_text
-    FROM `{dataset}.{table}`
-    WHERE person_id = @person_id AND _accession_number = @accession_number
-    """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("person_id", "INT64", int(person_id)),
-            bigquery.ScalarQueryParameter("accession_number", "STRING", str(accession_number).strip()),
-        ]
-    )
-    return bq_client.query(query, job_config=job_config).to_dataframe()
-
-
-def format_note_text_like_text_value(
-    note_text: str,
-    max_text_len: int | None = None,
-) -> str:
-    """
-    Format note_text the same way text_value is formatted in get_llm_event_string
-    (test_meds_tools): replace newlines with space, strip, optional truncation, NOTE: prefix.
-    Returns a single line (or empty string if no content).
-    """
-    if pd.isna(note_text):
-        return ""
-    clean_text = str(note_text).replace("\n", " ").strip()
-    if not clean_text:
-        return ""
-    if max_text_len and len(clean_text) > max_text_len:
-        clean_text = clean_text[:max_text_len] + "..."
-    return f"NOTE: {clean_text}"
-
-
-def build_report_from_notes(
-    notes_df: pd.DataFrame,
-    max_text_len: int | None = None,
-) -> str:
-    """
-    Build report string from note_text column in notes_df, formatting each like text_value.
-    Returns newline-joined lines (same format as get_llm_event_string for text_value).
-    """
-    if notes_df.empty or "note_text" not in notes_df.columns:
-        return ""
-    lines = []
-    for _, row in notes_df.iterrows():
-        line = format_note_text_like_text_value(row["note_text"], max_text_len=max_text_len)
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
+from data_tools.utils.query_utils import get_notes_from_bq_batch
+from data_tools.utils.report_utils import build_report_from_notes
+from data_tools.utils.config_utils import load_tasks_and_base_dir, load_task_source_csv
 
 
 def process_csv_add_report(
@@ -94,6 +24,8 @@ def process_csv_add_report(
     accession_col: str = "_accession_number",
     overwrite_report: bool = False,
     max_text_len: int | None = None,
+    note_dataset: str | None = None,
+    note_table: str | None = None,
 ) -> pd.DataFrame:
     """
     Read _subsampled_no_img_report CSV. If 'report' already exists and not overwrite_report, return as-is.
@@ -114,22 +46,65 @@ def process_csv_add_report(
         df["report"] = ""
         return df
 
-    reports = []
-    for i, row in df.iterrows():
-        person_id = row[person_id_col]
-        accession = row.get(accession_col)
+    note_dataset = note_dataset or None
+    note_table = note_table or None
 
-        report_text = ""
-        if pd.notna(person_id) and pd.notna(accession) and str(accession).strip():
-            try:
-                notes_df = get_notes_from_bq(bq_client, person_id, str(accession))
-                report_text = build_report_from_notes(notes_df, max_text_len=max_text_len)
-            except Exception as e:
-                print(f"  [WARN] Row {i} (person_id={person_id}, accession={accession}): {e}")
+    # Unique (person_id, accession) pairs with non-null accession
+    mask_valid = df[accession_col].notna() & (df[accession_col].astype(str).str.strip() != "")
+    pairs = list(
+        df.loc[mask_valid, [person_id_col, accession_col]]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
+    )
+    if not pairs:
+        df["report"] = ""
+        return df
 
-        reports.append(report_text)
+    # Single batched query for all pairs
+    batch_kwargs = {}
+    if note_dataset is not None:
+        batch_kwargs["dataset"] = note_dataset
+    if note_table is not None:
+        batch_kwargs["table"] = note_table
+    try:
+        notes_batch = get_notes_from_bq_batch(bq_client, pairs, **batch_kwargs)
+    except Exception as e:
+        print(f"  [WARN] Batch notes query failed: {e}")
+        df["report"] = ""
+        return df
 
-    df["report"] = reports
+    # Map (person_id, _accession_number) -> notes DataFrame (note_id, note_text, optional note_datetime for build_report_from_notes)
+    notes_by_key = {}
+    if not notes_batch.empty and "person_id" in notes_batch.columns and "_accession_number" in notes_batch.columns:
+        cols = ["note_id", "note_text"]
+        if "note_datetime" in notes_batch.columns:
+            cols.append("note_datetime")
+        for (pid, acc), grp in notes_batch.groupby(["person_id", "_accession_number"]):
+            key = (int(pid), str(acc).strip())
+            notes_by_key[key] = grp[[c for c in cols if c in grp.columns]].copy()
+
+    def report_for_row(person_id, accession):
+        if pd.isna(person_id) or pd.isna(accession) or str(accession).strip() == "":
+            return ""
+        try:
+            key = (int(person_id), str(accession).strip())
+        except (ValueError, TypeError):
+            return ""
+        notes_df = notes_by_key.get(key, pd.DataFrame(columns=["note_id", "note_text"]))
+        if notes_df.empty:
+            return ""
+        if "note_text" in notes_df.columns:
+            has_non_reportable = notes_df["note_text"].astype(str).str.contains(
+                "non-reportable", case=False, na=False
+            ).any()
+            if has_non_reportable:
+                return pd.NA
+        return build_report_from_notes(notes_df, max_text_len=max_text_len)
+
+    df["report"] = [
+        report_for_row(row[person_id_col], row.get(accession_col))
+        for _, row in df.iterrows()
+    ]
     return df
 
 
@@ -228,3 +203,4 @@ if __name__ == "__main__":
         overwrite=args.overwrite,
         max_text_len=args.max_text_len,
     )
+

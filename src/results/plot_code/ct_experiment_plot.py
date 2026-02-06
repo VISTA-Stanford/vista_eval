@@ -111,6 +111,7 @@ def calculate_accuracy(df, mapping):
             
             return df['is_correct'].mean() * 100
         else:
+            # print(df['label'].head(1).tolist())
             # If no mapping, return None (can't calculate accuracy without ground truth)
             print("  Warning: No mapping or 'label' column found, cannot calculate accuracy")
             return None
@@ -120,7 +121,7 @@ def calculate_accuracy(df, mapping):
         traceback.print_exc()
         return None
 
-def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcunhrya/vista_bench', config_path=None):
+def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcunhrya/vista_bench', config_path=None, figures_path=None):
     """
     Generate comparison plots for experiments across models for each task.
 
@@ -337,8 +338,8 @@ def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcu
         unique_experiments = df['Experiment'].unique()
         unique_models = df['Model'].unique()
         
-        if len(unique_experiments) < 2:
-            print(f"Skipping {task_name}: Need at least 2 experiments (found {len(unique_experiments)})")
+        if len(unique_experiments) < 1:
+            print(f"Skipping {task_name}: Need at least 1 experiments (found {len(unique_experiments)})")
             continue
         
         if len(unique_models) < 1:
@@ -374,7 +375,7 @@ def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcu
         
         # Save plot - organize by source_folder (overall task name) in figures directory
         # Structure: figures/{source_folder}/{task_name}_experiment_comparison.pdf
-        base_figures_dir = Path('/home/dcunhrya/vista_eval/figures')
+        base_figures_dir = Path(figures_path)
         save_dir = base_figures_dir / source_folder
         save_dir.mkdir(parents=True, exist_ok=True)
         
@@ -399,5 +400,7 @@ def generate_experiment_comparison_plots(results_path=None, base_path='/home/dcu
 
 if __name__ == "__main__":
     # Default config path
-    default_config = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
-    generate_experiment_comparison_plots(config_path=default_config)
+    default_config = '/home/rdcunha/vista_project/vista_eval_vlm/configs/all_tasks.yaml'
+    base_path = '/home/rdcunha/vista_project/vista_bench'
+    figures_path = '/home/rdcunha/vista_project/vista_eval_vlm/figures'
+    generate_experiment_comparison_plots(config_path=default_config, base_path=base_path, figures_path=figures_path)

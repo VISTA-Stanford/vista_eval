@@ -9,6 +9,7 @@ dependencies = [
     "google-cloud-bigquery>=3.40.0",
     "google-cloud-storage>=3.8.0",
     "nibabel>=5.3.3",
+    "pytest>=9.0.2",
     "reportlab>=4.4.9",
     "seaborn>=0.13.2",
 ]

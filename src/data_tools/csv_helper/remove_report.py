@@ -17,6 +17,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from data_tools.utils.config_utils import load_task_source_csv
+
 # Pattern to match a timeline entry starting with a datetime and containing imaging markers.
 # It matches from [datetime] | marker ... until the next [datetime] or end of string.
 # Markers: STANFORD_NOTE/imaging or STANFORD_NOTE/imaging-non-reportable
@@ -38,14 +40,6 @@ def load_tasks_and_config(config_path: str):
     subsample = config.get("subsample", False)
     return list(tasks), base_dir, subsample
 
-
-def load_task_source_csv(valid_tasks_json_path: str):
-    """Load task_name -> task_source_csv from valid_tasks.json."""
-    import json
-
-    with open(valid_tasks_json_path, "r") as f:
-        tasks = json.load(f)
-    return {t["task_name"]: t["task_source_csv"] for t in tasks if t.get("task_source_csv")}
 
 def remove_imaging_lines_from_timeline(patient_string: str) -> str:
     """

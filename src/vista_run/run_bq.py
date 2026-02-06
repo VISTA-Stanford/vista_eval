@@ -228,7 +228,7 @@ class TaskOrchestrator:
             # Get safety max_chars limit to prevent token overflow
             # Rough estimate: 1 token ≈ 4 characters, but can vary
             # Model max is 14588 tokens, so we use ~30000 chars to be safe (allows for prompt overhead)
-            safety_max_chars = truncation_config.get('max_chars', 150000)
+            safety_max_chars = truncation_config.get('max_chars', 200000)
             
             # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
             # Find all event start positions and extract dates
@@ -340,17 +340,17 @@ class TaskOrchestrator:
         # Get experiments from config (default to ['no_image'] if not specified)
         experiments = self.cfg.get('experiments', ['no_image'])
 
-        # For each task: load data (different CSV for no_report), then run all experiments
+        # For each task: load data (different CSV for no_report/report), then run all experiments
         for task_info in tasks_to_run:
             task_name = task_info['task_name']
-            # no_report uses _subsampled_no_img_report.csv; other experiments use normal CSV
-            needs_no_report = 'no_report' in experiments
-            needs_normal = any(e != 'no_report' for e in experiments)
+            # no_report and report use _subsampled_no_img_report.csv; other experiments use normal CSV
+            needs_report_csv = 'no_report' in experiments or 'report' in experiments
+            needs_normal = any(e not in ('no_report', 'report') for e in experiments)
             loaded_normal = self._load_task_data(task_info, use_no_report_csv=False) if needs_normal else None
-            loaded_no_report = self._load_task_data(task_info, use_no_report_csv=True) if needs_no_report else None
+            loaded_no_report = self._load_task_data(task_info, use_no_report_csv=True) if needs_report_csv else None
             for experiment in experiments:
                 print(f"\n>>> Starting Task: {task_name} | Experiment: {experiment}")
-                if experiment == 'no_report':
+                if experiment in ('no_report', 'report'):
                     loaded = loaded_no_report
                 else:
                     loaded = loaded_normal
@@ -364,36 +364,51 @@ class TaskOrchestrator:
         Query BigQuery once per task and merge with local CSV timelines.
         Returns (df, timeline_col, source_csv) or None on failure.
         Same data is reused for all experiments.
-        When use_no_report_csv=True, loads from *_subsampled_no_img_report.csv (for no_report experiment).
+        When use_no_report_csv=True, loads from *_subsampled_no_img_report.csv (for no_report and report experiments).
         """
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
 
-        # --- BIGQUERY LOADING (once per task) ---
-        dataset_id = "vista_bench_v1_1"
-        full_table_id = f"{self.project_id}.{dataset_id}.{source_csv}"
-        print(f"\n>>> Loading data for task: {task_name} (one BigQuery query for all experiments)")
-        print(f"    Querying BigQuery table: {full_table_id}...")
+        # --- LOAD FROM LOCAL CACHE OR BIGQUERY ---
+        local_bq_path = self.base_path / "bigquery_data_2_3" / source_csv
+        if local_bq_path.exists():
+            print(f"\n>>> Loading data for task: {task_name} (from local cache)")
+            print(f"    Reading {local_bq_path}...")
+            try:
+                df_all = pd.read_csv(local_bq_path)
+                df = df_all[df_all["task"] == task_name].copy()
+            except Exception as e:
+                print(f"!!! Error reading local BigQuery data for {task_name}: {e}")
+                return None
+            if df.empty:
+                print(f"!!! No data found for task '{task_name}' in local file.")
+                return None
+            print(f"    Loaded {len(df)} rows from local cache.")
+        else:
+            dataset_id = "vista_bench_v1_1"
+            full_table_id = f"{self.project_id}.{dataset_id}.{source_csv}"
+            print(f"\n>>> Loading data for task: {task_name} (one BigQuery query for all experiments)")
+            print(f"    Querying BigQuery table: {full_table_id}...")
 
-        query = f"""
-            SELECT *
-            FROM `{full_table_id}`
-            WHERE task = @task
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("task", "STRING", task_name)
-            ]
-        )
-        try:
-            df = self.bq_client.query(query, job_config=job_config).to_dataframe()
-        except Exception as e:
-            print(f"!!! BigQuery Error for {task_name}: {e}")
-            return None
-        if df.empty:
-            print(f"!!! No data found for task '{task_name}' in BigQuery.")
-            return None
-        print(f"    Loaded {len(df)} rows from BigQuery.")
+            query = f"""
+                SELECT *
+                FROM `{full_table_id}`
+                WHERE task = @task
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("task", "STRING", task_name)
+                ]
+            )
+            try:
+                df = self.bq_client.query(query, job_config=job_config).to_dataframe()
+            except Exception as e:
+                print(f"!!! BigQuery Error for {task_name}: {e}")
+                return None
+            if df.empty:
+                print(f"!!! No data found for task '{task_name}' in BigQuery.")
+                return None
+            print(f"    Loaded {len(df)} rows from BigQuery.")
 
         if 'index' not in df.columns:
             df['index'] = df.index
@@ -428,10 +443,15 @@ class TaskOrchestrator:
                 print(f"!!! Error: Patient timeline column not found in CSV.")
                 return None
             print(f"    Merging BigQuery data with CSV on 'person_id'...")
-            merge_df = csv_df[['person_id', csv_timeline_col]].copy()
+            merge_cols = ['person_id', csv_timeline_col]
+            if use_no_report_csv and 'report' in csv_df.columns:
+                merge_cols.append('report')
+            merge_df = csv_df[merge_cols].copy()
             merge_df = merge_df.rename(columns={csv_timeline_col: timeline_col})
             if timeline_col in df.columns:
                 df = df.drop(columns=[timeline_col])
+            if 'report' in df.columns:
+                df = df.drop(columns=['report'])
             df = df.merge(merge_df, on='person_id', how='inner')
             matched_count = df[timeline_col].notna().sum()
             print(f"    Matched {matched_count} out of {len(df)} rows with patient timelines.")
@@ -473,6 +493,14 @@ class TaskOrchestrator:
             df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(
                 lambda x: base_prompt_template.replace("[PATIENT_TIMELINE]", self._get_first_4_rows(x))
             )
+        elif experiment == 'report':
+            # report: timeline + "Radiology Report:" + report column (no images; uses _subsampled_no_img_report CSV)
+            def timeline_with_report(row):
+                timeline = str(row[timeline_col]) if pd.notna(row[timeline_col]) else ""
+                report = str(row['report']) if 'report' in row and pd.notna(row.get('report')) else ""
+                combined = f"{timeline}\nRadiology Report: {report}".rstrip()
+                return base_prompt_template.replace('[PATIENT_TIMELINE]', combined)
+            df_exp['dynamic_prompt'] = df_exp.apply(timeline_with_report, axis=1)
         else:
             df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 

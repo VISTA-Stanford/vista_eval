@@ -8,22 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
-
-
-def load_tasks_and_base_dir(config_path: str):
-    """Load task list and base_dir from YAML config."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    tasks = config.get("tasks", [])
-    base_dir = config.get("paths", {}).get("base_dir", "")
-    return list(tasks), base_dir
-
-
-def load_task_source_csv(valid_tasks_json_path: str):
-    """Load task_name -> task_source_csv from valid_tasks.json."""
-    with open(valid_tasks_json_path, "r") as f:
-        tasks = json.load(f)
-    return {t["task_name"]: t["task_source_csv"] for t in tasks if t.get("task_source_csv")}
+from data_tools.utils.config_utils import load_tasks_and_base_dir, load_task_source_csv
 
 
 def main(
@@ -41,7 +26,7 @@ def main(
         if not source_csv:
             print(f"[SKIP] No task_source_csv for task '{task_name}'")
             continue
-        csv_path = base_path / source_csv / f"{task_name}_subsampled.csv"
+        csv_path = base_path / source_csv / f"{task_name}_subsampled_no_img_report.csv"
         if not csv_path.exists():
             print(f"[SKIP] File not found: {csv_path}")
             continue

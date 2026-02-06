@@ -16,21 +16,11 @@ class Qwen3Adapter(BaseVLMAdapter):
             dtype="bfloat16",
             trust_remote_code=True,
             gpu_memory_utilization=0.85,
-            
-            # 1. Performance Flags
             enable_chunked_prefill=True,
             enable_prefix_caching=False,
-            
-            # 2. Crash Prevention (Video Profiling)
-            # Qwen3 supports video. vLLM will try to profile it and might crash FlashAttn 
-            # if we don't explicitly disable video support here.
             limit_mm_per_prompt={"image": 100, "video": 0},
-            
-            # 3. Cache Fix
             mm_processor_cache_gb=0,
-            
-            # 4. Context Safety
-            max_model_len=100000,
+            max_model_len=120000,
         )
         
         # Load processor for chat template formatting

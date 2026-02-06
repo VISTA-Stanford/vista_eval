@@ -14,72 +14,8 @@ import json
 import meds_reader
 from meds_tools import patient_timeline
 from meds2text.ontology import OntologyDescriptionLookupTable
-
-
-def load_tasks_and_base_dir(config_path: str):
-    """Load task list and base_dir from YAML config."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    tasks = config.get("tasks", [])
-    base_dir = config.get("paths", {}).get("base_dir", "")
-    return list(tasks), base_dir
-
-
-def load_task_source_csv(valid_tasks_json_path: str):
-    """Load task_name -> task_source_csv from valid_tasks.json."""
-    with open(valid_tasks_json_path, "r") as f:
-        tasks = json.load(f)
-    return {t["task_name"]: t["task_source_csv"] for t in tasks if t.get("task_source_csv")}
-
-
-def get_llm_event_string_no_imaging(
-    df: pd.DataFrame,
-    include_text: bool = True,
-    max_text_len: int | None = None,
-) -> str:
-    """
-    Same as get_llm_event_string from test_meds_tools but skips imaging codes
-    (STANFORD_NOTE/imaging, STANFORD_NOTE/imaging-non-reportable) so the timeline
-    has no radiology report text.
-    """
-    if df.empty:
-        return "No clinical events found for this period."
-
-    lines = []
-    for _, row in df.iterrows():
-        event_parts = []
-
-        if "time" in row and pd.notnull(row["time"]):
-            time_str = row["time"].strftime("%Y-%m-%d %H:%M")
-            event_parts.append(f"[{time_str}]")
-
-        if "code" in row and pd.notnull(row["code"]):
-            code_val = row["code"]
-            if code_val == "STANFORD_NOTE/imaging" or code_val == "STANFORD_NOTE/imaging-non-reportable":
-                continue
-            desc = (
-                f" ({row['description']})"
-                if pd.notnull(row.get("description")) and row["description"] != ""
-                else ""
-            )
-            event_parts.append(f"{row['code']}{desc}")
-
-        if "numeric_value" in row and pd.notnull(row["numeric_value"]):
-            unit_str = f" {row['unit']}" if pd.notnull(row.get("unit")) else ""
-            event_parts.append(f"VALUE: {row['numeric_value']}{unit_str}")
-
-        if include_text and "text_value" in row and pd.notnull(row["text_value"]):
-            clean_text = str(row["text_value"]).replace("\n", " ").strip()
-            if clean_text:
-                if max_text_len and len(clean_text) > max_text_len:
-                    clean_text = clean_text[:max_text_len] + "..."
-                event_parts.append(f"NOTE: {clean_text}")
-
-        if event_parts:
-            lines.append(" | ".join(event_parts))
-
-    return "\n".join(lines)
-
+from data_tools.utils.meds_timeline_utils import get_llm_event_string
+from data_tools.utils.config_utils import load_tasks_and_base_dir, load_task_source_csv
 
 def process_subsampled_csv(
     csv_path: Path,
@@ -129,7 +65,7 @@ def process_subsampled_csv(
             # Event DataFrame has MultiIndex (subject_id, time); expose 'time' as column for get_llm_event_string
             if not window_df.empty and "time" not in window_df.columns and hasattr(window_df.index, "names") and window_df.index.names:
                 window_df = window_df.reset_index()
-            patient_string = get_llm_event_string_no_imaging(window_df, include_text=True)
+            patient_string = get_llm_event_string(window_df, include_text=True, exclude_report=True)
         except Exception as e:
             print(f"  [WARN] Row {i} (person_id={subject_id}): {e}")
             patient_string = row.get("patient_string", "") if pd.notna(row.get("patient_string")) else ""
@@ -206,7 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--valid-tasks", default="/home/rdcunha/vista_project/vista_bench/tasks/valid_tasks.json", help="Path to valid_tasks.json")
     parser.add_argument("--meds-db", default="/home/rdcunha/vista_project/vista_bench/thoracic_cohort_meds/vista_thoracic_cohort_v0_db", help="Path to meds reader DB")
     parser.add_argument("--ontology", default="/home/rdcunha/vista_project/vista_bench/thoracic_cohort_meds/athena_omop_ontologies", help="Path to ontology")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing _subsampled_no_img_report files")
+    parser.add_argument("--overwrite", default=True, help="Overwrite existing _subsampled_no_img_report files")
     args = parser.parse_args()
 
     run(

@@ -156,25 +156,32 @@ df_patient = patient_timeline.get_described_events_window(
     start_time=START_DATE,
     end_time=END_DATE
 )
-print(df_patient.columns)
+# print(df_patient.columns)
 print(len(df_patient))
-print(df_patient['text_value'].nunique())
+# print(df_patient['text_value'].nunique())
 # print(df_patient.head())
 
 # print(f"Total events found: {len(df_patient)}")
 print("--------------------------")
 
 # Rows with image_occurrence_id: both populated vs missing note_id
-# required_for_note_check = ["image_occurrence_id", "note_id"]
-# required_for_uid_check = required_for_note_check + ["image_series_uid", "image_study_uid"]
+required_for_note_check = ["image_occurrence_id", "note_id"]
+required_for_uid_check = required_for_note_check + ["image_series_uid", "image_study_uid"]
 
-# if all(c in df_patient.columns for c in required_for_note_check):
-#     rows_with_note, rows_without_note = rows_by_image_note_status(df_patient)
-#     print("Rows with image_occurrence_id AND populated note_id:")
-#     print(rows_with_note)
-#     print("--------------------------")
-#     print("Rows with image_occurrence_id but NO populated note_id:")
-#     print(rows_without_note)
+if all(c in df_patient.columns for c in required_for_note_check):
+    rows_with_note, rows_without_note = rows_by_image_note_status(df_patient)
+    # print("Rows with image_occurrence_id AND populated note_id:")
+    # print(rows_with_note['image_occurrence_id'].head())
+    # print(rows_with_note['note_id'].head())
+    # print("--------------------------")
+    # print("Rows with image_occurrence_id but NO populated note_id:")
+    # print(rows_without_note)
+
+    # How many note_id correspond to >1 image_occurrence_id?
+    note_to_n_io = rows_with_note.groupby("note_id")["image_occurrence_id"].nunique()
+    n_notes_with_multiple_io = (note_to_n_io > 1).sum()
+    print("--------------------------")
+    print(f"note_id with >1 image_occurrence_id: {n_notes_with_multiple_io} (of {rows_with_note['image_occurrence_id'].nunique()} note_ids with both populated)")
 
 #     # Among rows with note_id + image_occurrence_id, check image_series_uid and image_study_uid
 #     if all(c in df_patient.columns for c in required_for_uid_check):

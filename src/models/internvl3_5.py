@@ -14,7 +14,7 @@ class InternVL35Adapter(BaseVLMAdapter):
 
         engine_cfg = PytorchEngineConfig(
             # session_len=32768,
-            session_len=100000,
+            session_len=120000,
             tp=1,
             dtype="bfloat16"
         )

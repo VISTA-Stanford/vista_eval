@@ -77,7 +77,7 @@ def process_all_tasks(config_path):
         source_csv = task_info['task_source_csv']
         
         # Construct CSV path (same logic as run.py)
-        csv_path = base_path / source_csv / f"{task_name}.csv"
+        csv_path = base_path / source_csv / f"{task_name}_subsampled_no_img_report.csv"
         
         if not csv_path.exists():
             print(f"Warning: CSV file not found at {csv_path}. Skipping task '{task_name}'.")
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Count unique events per person_id for all tasks")
-    parser.add_argument("--config", type=str, default="/home/dcunhrya/vista_eval/configs/all_tasks.yaml",
+    parser.add_argument("--config", type=str, default="/home/rdcunha/vista_project/vista_eval_vlm/configs/all_tasks.yaml",
                        help="Path to config YAML file")
     args = parser.parse_args()
     

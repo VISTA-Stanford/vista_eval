@@ -63,7 +63,7 @@ class PromptDataset(Dataset):
             df: Dataframe containing the data.
             prompt_col: The column name to use for the text prompt.
             add_options: Whether to append options to the prompt.
-            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', or 'no_report'
+            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', 'no_report', or 'report'
             storage_client: GCP Storage client for loading NIfTI files from bucket (used when file not under ct_dir).
             model_type: Model type string (e.g., 'gemma3') to determine preprocessing.
             ct_dir: Optional path from config paths.ct_dir. If set and nifti_path (split to filename) exists under ct_dir, load from disk; else use GCP.
@@ -122,8 +122,8 @@ class PromptDataset(Dataset):
         img = None
         image_path = row.get('image_path', None)
         
-        # Skip image loading for 'no_image' experiment
-        if self.experiment == 'no_image':
+        # Skip image loading for 'no_image' and 'report' experiments
+        if self.experiment == 'no_image' or self.experiment == 'report':
             img = None
         else:
             # First check for image_path (existing behavior)

@@ -555,9 +555,9 @@ def generate_questions_pdf(results_path=None,
 
 
 if __name__ == "__main__":
-    config_path = '/home/dcunhrya/vista_eval/configs/all_tasks.yaml'
-    base_path = '/home/dcunhrya/vista_bench'
+    config_path = '/home/rdcunha/vista_project/vista_eval_vlm/configs/all_tasks.yaml'
+    base_path = '/home/rdcunha/vista_project/vista_bench'
     generate_questions_pdf(config_path=config_path)
-    print("\nGenerating CT slice PDFs for each experiment...")
-    generate_ct_slice_pdfs(base_path=base_path, config_path=config_path,
-                          output_dir='/home/dcunhrya/vista_eval/figures/ct_example')
+    # print("\nGenerating CT slice PDFs for each experiment...")
+    # generate_ct_slice_pdfs(base_path=base_path, config_path=config_path,
+    #                       output_dir='/home/rdcunha/vista_project/vista_eval_vlm/figures/ct_example')

@@ -5,21 +5,10 @@ import csv
 import sys
 from pathlib import Path
 from google.cloud import storage
+from data_tools.utils.config_utils import load_tasks_from_config
 
 # Increase the limit to handle very large clinical text fields
 csv.field_size_limit(sys.maxsize)
-
-def load_tasks_from_config(config_path):
-    """Load task list from YAML config file."""
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-            tasks = config.get('tasks', [])
-            return set(tasks)
-    except Exception as e:
-        print(f"Error loading config from {config_path}: {e}")
-        return set()
-
 
 def download_ct_scans(base_path='/home/rdcunha/vista_project/vista_bench',
                       bucket_name='su-vista-uscentral1',
