@@ -1,7 +1,7 @@
 paths:
   base_dir: "/home/rdcunha/vista_project/vista_bench"
   results_dir: "/home/rdcunha/vista_project/results"
-  ct_dir: "/home/rdcunha/vista_project/downloaded_ct_scans/chaudhari_lab/ct_data/ct_scans/vista/nov25"
+  ct_dir: "/data/fries/vista_project_ryan/downloaded_ct_scans/chaudhari_lab/ct_data/ct_scans/vista/nov25"
   valid_tasks: "tasks/valid_tasks.json"
   prompts: "tasks/prompts_by_task.json"
 
@@ -9,38 +9,38 @@ model:
   device: "cuda"
 
 runtime:
-  cache_dir: "/home/rdcunha/model_cache"
-  batch_size: 10
+  cache_dir: "/data/fries/users/rdcunha/model_cache"
+  batch_size: 20
   max_new_tokens: 1024
 
 models:
-  # - type: "intern"
-  #   name: "OpenGVLab/InternVL3_5-8B"
+  - type: "intern"
+    name: "OpenGVLab/InternVL3_5-8B"
   
-  # - type: "gemma3"
-  #   name: "google/medgemma-1.5-4b-it"
+  - type: "gemma3"
+    name: "google/medgemma-1.5-4b-it"
 
-  # - type: "gemma3"
-  #   name: "google/medgemma-4b-it"
+  - type: "gemma3"
+    name: "google/medgemma-4b-it"
+
+  - type: "qwen3vl"
+    name: "Qwen/Qwen3-VL-8B-Instruct"
 
   - type: "octomed"
     name: "OctoMed/OctoMed-7B"
-
-  # - type: "qwen3vl"
-  #   name: "Qwen/Qwen3-VL-8B-Instruct"
 
 tasks:
   # - radiation_oligoprogression_answer
   # - pneumonitis_infection_answer
 
-  # - early_stage_management_answer
-  # - progression_assessment_discussed
-  # - pneumonitis_infection_discussed
-  # - died_of_cancer_1_yr
-  # - died_of_cancer_2_yr
-  # - died_of_cancer_3_yr
-  # - died_of_cancer_4_yr
-  # - died_of_cancer_5_yr
+  - early_stage_management_answer
+  - progression_assessment_discussed
+  - pneumonitis_infection_discussed
+  - died_of_cancer_1_yr
+  - died_of_cancer_2_yr
+  - died_of_cancer_3_yr
+  - died_of_cancer_4_yr
+  - died_of_cancer_5_yr
   - has_recurrence_1_yr
   - has_recurrence_2_yr
   - has_recurrence_3_yr
@@ -65,7 +65,7 @@ experiments:
 timeline_truncation:
   mode: "last_k_events"  # Options: "max_chars" or "last_k_events"
   # max_chars: 5000     # Used when mode is "max_chars"
-  k: 30             # Used when mode is "last_k_events"
+  k: 35             # Used when mode is "last_k_events"
 
 # CSV subsampling configuration
 # If true, use _subsampled.csv files instead of regular .csv files
@@ -74,4 +74,4 @@ subsample: true
 # Weill eval: which GPU nodes to use (0-7). Used by eval/weill.sh.
 # Override with WEILL_GPUS env or command-line args if needed.
 weill:
-  gpu_nodes: [4]
+  gpu_nodes: [3]

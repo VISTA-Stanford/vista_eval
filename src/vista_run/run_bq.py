@@ -225,10 +225,7 @@ class TaskOrchestrator:
         
         elif mode == 'last_k_events':
             initial_k = truncation_config.get('k', 10)
-            # Get safety max_chars limit to prevent token overflow
-            # Rough estimate: 1 token ≈ 4 characters, but can vary
-            # Model max is 14588 tokens, so we use ~30000 chars to be safe (allows for prompt overhead)
-            safety_max_chars = truncation_config.get('max_chars', 200000)
+            safety_max_chars = truncation_config.get('max_chars', 180000)
             
             # Pattern to match event markers: [YYYY-MM-DD HH:MM] |
             # Find all event start positions and extract dates

@@ -32,7 +32,7 @@ def get_llm_event_string(
         if 'code' in row and pd.notnull(row['code']):
             if exclude_report:
                 code_val = str(row['code'])
-                if 'STANFORD_NOTE/imaging' in code_val:
+                if 'STANFORD' in code_val:
                     continue
             desc = f" ({row['description']})" if pd.notnull(row.get('description')) and row['description'] != "" else ""
             event_parts.append(f"{row['code']}{desc}")

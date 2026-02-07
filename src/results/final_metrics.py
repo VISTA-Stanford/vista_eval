@@ -1,16 +1,17 @@
 """
 Read result CSVs (same discovery as ct_experiment_plot) from results_dir in config,
-and output figures/results_stats/results.csv with columns: task, model_name, experiment, AUROC, AUPRC, accuracy.
-For each (task, model), the experiment with the best accuracy is selected and metrics are computed from that experiment.
+and output figures/results_stats/results.csv with columns: task, model_name, experiment,
+true_positive, true_negative, false_positive, false_negative, sensitivity, specificity, accuracy.
+Includes all experiments for every model for every task.
 """
 
 import json
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
-from sklearn.metrics import roc_auc_score, average_precision_score
 
 # Ensure these imports exist in your environment
 from results.results_analyzer import _extract_answer, is_answer_correct, map_label_to_answer
@@ -62,14 +63,26 @@ def calculate_accuracy_like_plot(df, mapping):
     return df["is_correct"].mean() * 100
 
 
+def is_binary_yes_no_task(mapping):
+    """
+    Return True if the task uses binary Yes/No answers with mapping "1" -> "Yes", "0" -> "No".
+    Confusion matrix is only meaningful for such tasks (Yes=1 positive, No=0 negative).
+    """
+    if not mapping or not isinstance(mapping, dict):
+        return False
+    yes_str = (mapping.get("1") or "").strip().lower()
+    no_str = (mapping.get("0") or "").strip().lower()
+    return yes_str == "yes" and no_str == "no"
+
+
 def binary_labels_and_scores(df, mapping):
     """
     Build y_true (binary) and y_score (prediction score 0/1 from extracted answer).
+    Uses Yes=1 (positive) and No=0 (negative) per mapping["1"]="Yes", mapping["0"]="No".
     Excludes rows where label is -1 or maps to "Insufficient follow-up or missing data".
-    
-    FIX: Now includes ALL valid ground truth rows. 
-         If model output matches 'positive' -> score 1.0
-         Anything else (negative match, garbage, ambiguous) -> score 0.0
+
+    If model output matches 'Yes' (positive) -> score 1.0.
+    Otherwise (No, garbage, ambiguous) -> score 0.0.
     """
     if not mapping or "label" not in df.columns or "model_response" not in df.columns:
         return None, None
@@ -96,13 +109,10 @@ def binary_labels_and_scores(df, mapping):
 
     df["cleaned_response"] = df["model_response"].apply(_extract_answer)
     
-    # 2. Build y_true based on mapped_label
-    # 1 if Label is positive, 0 otherwise
+    # 2. Build y_true based on mapped_label: Yes=1, No=0
     y_true = (df["mapped_label"].str.strip().str.lower() == pos_str.strip().lower()).astype(int).values
 
-    # 3. Build y_score based on prediction
-    # If the response text matches the positive string -> 1.0
-    # Otherwise -> 0.0 (This correctly penalizes garbage/ambiguous answers as failures to detect positive)
+    # 3. Build y_score based on prediction: Yes=1.0, No (or other)=0.0
     # If you have a 'probability' column in your CSV, you should use that here instead.
     y_score = (df["cleaned_response"].str.strip().str.lower() == pos_str.strip().lower()).astype(float).values
 
@@ -111,35 +121,37 @@ def binary_labels_and_scores(df, mapping):
 
 def compute_metrics(df, mapping):
     """
-    Compute AUROC, AUPRC (%), and accuracy (%).
+    Compute confusion matrix metrics and accuracy (%).
+    Returns: (tp, tn, fp, fn, sensitivity, specificity, accuracy).
     Accuracy: same as ct_experiment_plot (is_answer_correct on all rows).
-    AUROC/AUPRC: on rows with valid label (exclude -1/insufficient).
+    TP/TN/FP/FN, sensitivity, specificity: on rows with valid label (exclude -1/insufficient).
     """
     # Accuracy: match ct_experiment_plot exactly (all rows, is_answer_correct)
     accuracy = calculate_accuracy_like_plot(df, mapping)
     if accuracy is None:
-        return None, None, None
+        return None, None, None, None, None, None, None
 
-    # AUROC/AUPRC
     y_true, y_score = binary_labels_and_scores(df, mapping)
-    
-    # If filtering resulted in empty data
     if y_true is None or len(y_true) == 0:
-        return float("nan"), float("nan"), accuracy
+        return float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), accuracy
 
-    try:
-        # AUROC requires at least one sample of each class (0 and 1) in y_true
-        if len(set(y_true)) < 2:
-            auroc = float("nan")
-            auprc = float("nan")
-        else:
-            auroc = roc_auc_score(y_true, y_score)
-            auprc = average_precision_score(y_true, y_score)
-    except Exception:
-        auroc = float("nan")
-        auprc = float("nan")
-        
-    return auroc, auprc, accuracy
+    y_true = np.asarray(y_true)
+    y_pred = (np.asarray(y_score) >= 0.5).astype(int)
+
+    tp = int(np.sum((y_true == 1) & (y_pred == 1)))
+    tn = int(np.sum((y_true == 0) & (y_pred == 0)))
+    fp = int(np.sum((y_true == 0) & (y_pred == 1)))
+    fn = int(np.sum((y_true == 1) & (y_pred == 0)))
+
+    # Sensitivity = TP / (TP + FN); recall for positive class
+    denom_sens = tp + fn
+    sensitivity = tp / denom_sens if denom_sens > 0 else float("nan")
+
+    # Specificity = TN / (TN + FP)
+    denom_spec = tn + fp
+    specificity = tn / denom_spec if denom_spec > 0 else float("nan")
+
+    return tp, tn, fp, fn, sensitivity, specificity, accuracy
 
 
 def collect_result_files(results_base, valid_tasks, valid_models, valid_experiments):
@@ -222,14 +234,9 @@ def main(config_path=None, output_path=None):
         unique_models = list({k[1] for k in task_keys})
         
         for model_name in unique_models:
-            # For this (task, model), get accuracy for each experiment and pick best
-            best_accuracy = None
-            best_experiment = None
-            best_df = None
-            
-            # Iterate over all experiments for this specific task & model
+            # Include all experiments for this (task, model)
             relevant_keys = [k for k in task_keys if k[1] == model_name]
-            
+
             for key in relevant_keys:
                 experiment = key[2]
                 files = by_task_model_exp[key]
@@ -241,40 +248,39 @@ def main(config_path=None, output_path=None):
                             dfs.append(df)
                     except Exception as e:
                         print(f"  Error reading {fp.name}: {e}")
-                
+
                 if not dfs:
                     continue
-                    
+
                 combined = pd.concat(dfs, ignore_index=True)
                 if "index" in combined.columns:
                     combined = combined.drop_duplicates(subset=["index"], keep="first")
-                
-                # Compute provisional metrics just to get accuracy
-                _, _, acc = compute_metrics(combined, mapping)
-                
-                if acc is None:
+
+                tp, tn, fp, fn, sensitivity, specificity, accuracy = compute_metrics(combined, mapping)
+                if accuracy is None:
                     continue
-                    
-                if best_accuracy is None or acc > best_accuracy:
-                    best_accuracy = acc
-                    best_experiment = experiment
-                    best_df = combined
-            
-            # After finding best experiment, save row
-            if best_df is None or best_experiment is None:
-                continue
-            
-            auroc, auprc, accuracy = compute_metrics(best_df, mapping)
-            
-            # Even if auroc is NaN (e.g. only 1 class in GT), we might want to save the Accuracy
-            rows.append({
-                "task": task_name,
-                "model_name": model_name,
-                "experiment": best_experiment,
-                "AUROC": auroc,
-                "AUPRC": auprc,
-                "accuracy": accuracy,
-            })
+
+                # Only compute confusion matrix for binary Yes/No tasks (Yes=1, No=0)
+                include_confusion = (
+                    ("died_of_cancer" in task_name or "has_recurrence" in task_name or 'pneumonitis_infection' in task_name)
+                    and is_binary_yes_no_task(mapping)
+                )
+                row = {
+                    "task": task_name,
+                    "model_name": model_name,
+                    "experiment": experiment,
+                    "accuracy": accuracy,
+                }
+                if include_confusion:
+                    row.update({
+                        "true_positive": tp,
+                        "true_negative": tn,
+                        "false_positive": fp,
+                        "false_negative": fn,
+                        "sensitivity": sensitivity,
+                        "specificity": specificity,
+                    })
+                rows.append(row)
 
     if not rows:
         print("No metrics computed.")

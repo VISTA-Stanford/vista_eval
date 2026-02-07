@@ -75,13 +75,7 @@ def process_csv(csv_path: Path, output_path: Path) -> tuple[str, str, str]:
             warnings.simplefilter("ignore")
             # Explicitly set quotechar and escapechar to handle messy medical notes
             df = pd.read_csv(
-                csv_path, 
-                # sep=",", 
-                # engine="python", 
-                # on_bad_lines="warn",
-                # quoting=0, # csv.QUOTE_MINIMAL
-                # quotechar='"',
-                # doublequote=True
+                csv_path
             )
     except Exception as e:
         return ("err", str(csv_path), repr(e))
