@@ -186,7 +186,7 @@ def process_one_csv(args):
 
 def subsample_csvs_parallel(
     base_path,
-    target_n=50,
+    target_n=100,
     workers=None,
     config_path=None,
     valid_tasks_json_path=None,
@@ -346,7 +346,7 @@ if __name__ == "__main__":
     VALID_TASKS_JSON_PATH = "/home/rdcunha/vista_project/vista_bench/tasks/valid_tasks.json"
     subsample_csvs_parallel(
         PATH,
-        target_n=50,
+        target_n=100,
         workers=1,
         config_path=CONFIG_PATH,
         valid_tasks_json_path=VALID_TASKS_JSON_PATH,

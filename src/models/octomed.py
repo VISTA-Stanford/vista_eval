@@ -180,9 +180,9 @@ class OctoMedAdapter(BaseVLMAdapter):
         stop_token_ids = [151645, 151643] 
 
         sampling_params = SamplingParams(
-            temperature=0.1,         # Slightly above 0 to break loops
+            temperature=0.1,
             max_tokens=max_new_tokens,
-            repetition_penalty=1.1,  # CRITICAL: Prevents the "fact loop"
+            repetition_penalty=1.1,
             stop_token_ids=stop_token_ids
         )
         

@@ -157,7 +157,8 @@ def _extract_answer_candidates(text):
 def _extract_answer(text):
     """
     Extract the primary answer from the model's raw output (for display / cleaned_response).
-    Priority: \\boxed{} > <answer> > <label> > <explanation> | answer > pipe last segment > angle brackets <Yes> or <"Yes"> > last word/phrase > full text.
+    Priority: \\boxed{} > <answer> (if non-empty) > <label> > double quotes "answer" > <explanation> | answer > pipe last segment > angle brackets <Yes> or <"Yes"> > last word/phrase > full text.
+    If <answer></answer> is empty, continues searching other patterns.
     """
     if pd.isna(text) or not str(text).strip():
         return ""
@@ -170,10 +171,14 @@ def _extract_answer(text):
         content = m.group(1).strip()
         if content:
             return _clean_extracted_answer(content)
-        # Empty tags: <answer></answer> No - answer is right after the closing tag
+        # Empty tags: <answer></answer> - check if answer is right after the closing tag
         after = re.search(r'</answer>\s*(.+)$', text, re.DOTALL | re.IGNORECASE)
         if after:
             return _clean_extracted_answer(after.group(1))
+        # If <answer></answer> is empty and no content after, continue searching other patterns
+        # (fall through to <label>, pipe, angle brackets, etc.) - don't return here
+    
+    # Check <label> tags (always check, even if <answer></answer> was empty)
     m = re.search(r'<label>(.*?)</label>', text, re.DOTALL | re.IGNORECASE)
     if m:
         content = m.group(1).strip()
@@ -183,6 +188,13 @@ def _extract_answer(text):
         after = re.search(r'</label>\s*(.+)$', text, re.DOTALL | re.IGNORECASE)
         if after:
             return _clean_extracted_answer(after.group(1))
+
+    # Check for answers in double quotes: "answer"
+    quoted_match = re.search(r'"([^"]+)"', text)
+    if quoted_match:
+        quoted_content = quoted_match.group(1).strip()
+        if quoted_content and len(quoted_content) <= 100:  # Reasonable length limit
+            return _clean_extracted_answer(quoted_content)
 
     # Explicit handling for <explanation> | answer format (reasoning in angle brackets, then pipe, then answer)
     m = re.search(r'>\s*\|\s*(.+)$', text, re.DOTALL)
@@ -220,14 +232,6 @@ def _extract_answer(text):
                         return _clean_extracted_answer(content)
                 return _clean_extracted_answer(last_part)
     
-    # Final check: if '|' is present and no answer found yet, check the left side of first '|'
-    if '|' in text:
-        first_pipe_idx = text.find('|')
-        if first_pipe_idx > 0:  # '|' is not at the beginning
-            left_side = text[:first_pipe_idx].strip()
-            if left_side:
-                return _clean_extracted_answer(left_side)
-    
     # Check for angle brackets (e.g., <Yes> or <"Yes">) - but only short ones to avoid matching explanations
     # Only match angle brackets that are short (<= 50 chars) to avoid matching long explanations
     angle_matches = list(re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', text))
@@ -238,6 +242,14 @@ def _extract_answer(text):
             # Skip long explanations that are in angle brackets
             if len(content) <= 50:
                 return _clean_extracted_answer(content)
+
+        # Final check: if '|' is present and no answer found yet, check the left side of first '|'
+    if '|' in text:
+        first_pipe_idx = text.find('|')
+        if first_pipe_idx > 0:  # '|' is not at the beginning
+            left_side = text[:first_pipe_idx].strip()
+            if left_side:
+                return _clean_extracted_answer(left_side)
     
     words = text.split()
     if words:
