@@ -14,68 +14,38 @@ OR (if issue)
 - Clone LLaVA-Med repo in src directory `git clone https://github.com/microsoft/LLaVA-Med.git`
 - Install `requirements-llava.txt` in a new uv environment called llava
 
-# Running Code
+# Running Code (GCP)
 
-To run code you need to edit a .yaml config file in configs/ and a .sh eval file in eval/ and then run `sbatch eval/{eval_file}.sh`
+To run code you need to edit `all_tasks.yaml` config file in configs/ and either bq_gcp.sh, gcp.sh, or weill.sh (depending on VM location) eval file in eval/ and then run `./eval/{eval_file}.sh`
 
 ## Configs
 
 In a .yaml file:
 
-- In "model", no need to change anything (this will be set in .sh scripts file for eval)
-- In "tasks", set the "name" and "data_path" for all eval tasks (can do multiple at once)
+- Edit all paths to be your local directory paths
+- Edit runtime to select model cache path and inference settings
+- Edit models for all/any models used
+- In "tasks", set the "name" for all eval tasks (can do multiple at once)
     - An example is shown in `configs/all_tasks.yaml`
-    - All task are defined in the 'Tasks' section
-- In "runtime", no need to change anything unless you want to edit model params or output dir
+    - All current tasks are defined in the vista_bench valid_tasks.json section (which is found on GCP)
+- In "experiment", set the specific experiment(s) you want to run
+- Edit subsample (boolean) if want to use subsampled data
+- If on weill cluster, set GPU nodes (not used for GCP)
 
 ## Eval
 
-In a .sh file (examples of cls, det, seg are shown):
+In a .sh file:
 
-- Change paths to current directory and environment directory
-- EDIT HUGGINGFACE TOKEN on line 19 (it will not work as the token you put on github expires)
-- CONFIG_PATH is path to .yaml file
-- MODEL_TYPE is listed in `src/models/__init__.py` and will be in the 'Models' section
-- MODEL_NAME is hf path to model and will be in the 'Models' section
+- Change .venv paths to current directory and environment directory
+- EDIT HUGGINGFACE TOKEN (it will not work as the token you put on github expires)
 
-**NOTE**: All models can be run with `run_vlm_eval.py` EXCEPT GEMMA MODELS NEED `run_vlm_eval_gemma.py`
-
-**NOTE** Edit `run_vlm_eval.py`if want to change "output_dir" (line 50) or "cache_dir" (line 57) or "base_path" (line 73)
-
-## Tasks
-
-This is a list of all tasks and their corresponding file name (shown in 'configs/all_tasks.yaml')
-
-- name: "classification_closed_VQA"
-    - data_path: "final_cls/final_subsampled_cls_closed_12_15_25.tsv"
-
-- name: "classification_open_VQA"
-    - data_path: "final_cls/final_subsampled_cls_open_12_15_25.tsv"
-    
-- name: "detection_guess_bbox_closed_VQA"
-    - data_path: "final_det/final_subsampled_det_guess_bbox_closed_12_15.tsv"
-
-- name: "detection_guess_bbox_open_VQA"
-    - data_path: "final_det/final_subsampled_det_guess_bbox_open_12_15.tsv"
-
-- name: "detection_grounding_closed_VQA"
-    - data_path: "final_det/final_subsampled_det_grounding_closed_12_15.tsv"
-
-- name: "detection_grounding_open_VQA"
-    - data_path: "final_det/final_subsampled_det_grounding_open_12_15.tsv"
-
-- name: "segmentation_grounding_closed_VQA"
-    - data_path: "final_seg/final_subsampled_seg_grounding_closed_12_15.tsv"
-
-- name: "segmentation_grounding_open_VQA"
-    - data_path: "final_seg/final_subsampled_seg_grounding_open_12_15.tsv"
-
-- name: "segmentation_guess_bbox_open_VQA"
-    - data_path: "final_seg/final_subsampled_seg_guess_mask_open_12_15.tsv"
+**NOTE**: All models can be run with `run_vlm_eval.py`
 
 ## Models
 
 List of all models that can be implement along with MODEL_TYPE and MODEL_NAME
+
+**NOTE**: Currently InternVL3.5, Qwen3, OctoMed, and Gemma are setup for vLLM inference
 
 - Qwen2-VL-2B-Instruct
     - MODEL_TYPE="qwen2vl"

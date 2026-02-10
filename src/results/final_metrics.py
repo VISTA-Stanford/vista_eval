@@ -1,7 +1,8 @@
 """
 Read result CSVs (same discovery as ct_experiment_plot) from results_dir in config,
 and output figures/results_stats/results.csv with columns: task, model_name, experiment,
-true_positive, true_negative, false_positive, false_negative, sensitivity, specificity, accuracy.
+accuracy, weighted_f1, and (for binary Yes/No tasks) true_positive, true_negative,
+false_positive, false_negative, sensitivity, specificity.
 Includes all experiments for every model for every task.
 """
 
@@ -119,21 +120,45 @@ def binary_labels_and_scores(df, mapping):
     return y_true, y_score
 
 
+def _weighted_f1_binary(tp, tn, fp, fn):
+    """
+    Compute weighted F1 for binary classification from confusion matrix counts.
+    F1 per class; weight by support (number of true samples per class).
+    """
+    support_pos = tp + fn
+    support_neg = tn + fp
+    n = support_pos + support_neg
+    if n == 0:
+        return float("nan")
+
+    # Positive class: precision = TP/(TP+FP), recall = TP/(TP+FN) = sensitivity
+    prec_pos = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    rec_pos = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_pos = 2 * prec_pos * rec_pos / (prec_pos + rec_pos) if (prec_pos + rec_pos) > 0 else 0.0
+
+    # Negative class: precision = TN/(TN+FN), recall = TN/(TN+FP) = specificity
+    prec_neg = tn / (tn + fn) if (tn + fn) > 0 else 0.0
+    rec_neg = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    f1_neg = 2 * prec_neg * rec_neg / (prec_neg + rec_neg) if (prec_neg + rec_neg) > 0 else 0.0
+
+    return (support_pos * f1_pos + support_neg * f1_neg) / n
+
+
 def compute_metrics(df, mapping):
     """
     Compute confusion matrix metrics and accuracy (%).
-    Returns: (tp, tn, fp, fn, sensitivity, specificity, accuracy).
+    Returns: (tp, tn, fp, fn, sensitivity, specificity, accuracy, weighted_f1).
     Accuracy: same as ct_experiment_plot (is_answer_correct on all rows).
-    TP/TN/FP/FN, sensitivity, specificity: on rows with valid label (exclude -1/insufficient).
+    TP/TN/FP/FN, sensitivity, specificity, weighted_f1: on rows with valid label (exclude -1/insufficient).
     """
     # Accuracy: match ct_experiment_plot exactly (all rows, is_answer_correct)
     accuracy = calculate_accuracy_like_plot(df, mapping)
     if accuracy is None:
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
     y_true, y_score = binary_labels_and_scores(df, mapping)
     if y_true is None or len(y_true) == 0:
-        return float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), accuracy
+        return float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), accuracy, float("nan")
 
     y_true = np.asarray(y_true)
     y_pred = (np.asarray(y_score) >= 0.5).astype(int)
@@ -151,7 +176,9 @@ def compute_metrics(df, mapping):
     denom_spec = tn + fp
     specificity = tn / denom_spec if denom_spec > 0 else float("nan")
 
-    return tp, tn, fp, fn, sensitivity, specificity, accuracy
+    weighted_f1 = _weighted_f1_binary(tp, tn, fp, fn)
+
+    return tp, tn, fp, fn, sensitivity, specificity, accuracy, weighted_f1
 
 
 def collect_result_files(results_base, valid_tasks, valid_models, valid_experiments):
@@ -256,7 +283,7 @@ def main(config_path=None, output_path=None):
                 if "index" in combined.columns:
                     combined = combined.drop_duplicates(subset=["index"], keep="first")
 
-                tp, tn, fp, fn, sensitivity, specificity, accuracy = compute_metrics(combined, mapping)
+                tp, tn, fp, fn, sensitivity, specificity, accuracy, weighted_f1 = compute_metrics(combined, mapping)
                 if accuracy is None:
                     continue
 
@@ -270,6 +297,7 @@ def main(config_path=None, output_path=None):
                     "model_name": model_name,
                     "experiment": experiment,
                     "accuracy": accuracy,
+                    "weighted_f1": weighted_f1,
                 }
                 if include_confusion:
                     row.update({

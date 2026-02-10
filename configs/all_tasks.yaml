@@ -4,6 +4,7 @@ paths:
   ct_dir: "/data/fries/vista_project_ryan/downloaded_ct_scans/chaudhari_lab/ct_data/ct_scans/vista/nov25"
   valid_tasks: "tasks/valid_tasks.json"
   prompts: "tasks/prompts_by_task.json"
+  image_prompts: "tasks/image_valid_tasks.json"
 
 model:
   device: "cuda"
@@ -14,8 +15,8 @@ runtime:
   max_new_tokens: 1024
 
 models:
-  - type: "intern"
-    name: "OpenGVLab/InternVL3_5-8B"
+  # - type: "intern"
+  #   name: "OpenGVLab/InternVL3_5-8B"
   
   - type: "gemma3"
     name: "google/medgemma-1.5-4b-it"
@@ -46,6 +47,11 @@ tasks:
   - has_recurrence_3_yr
   - has_recurrence_4_yr
   - has_recurrence_5_yr
+  # New tasks
+  - progression_recurrence_free_survival_1_yr
+  - progression_recurrence_free_survival_2_yr
+  - died_any_cause_1_yr
+  - died_any_cause_2_yr
 
 experiments:
   # - no_image # no image
@@ -55,7 +61,19 @@ experiments:
   # - sagittal_all_image # 10 sagittal images
   # - no_timeline # 100 axial images (no timeline)
   - no_report # no radiology report
-  - report # radiology report
+  # - timeline_only # timeline only
+  # - report # radiology report
+
+# Retrieval (for retrieved_timeline experiment)
+retrieval:
+  enabled: false
+  corpus_dir: "/path/to/xml/subset"
+  cache_dir: "/path/to/bm25_cache"
+  max_iterations: 3
+  max_results_per_query: 15
+  save_iterations_log: true
+  iterations_log_dir: null  # default: {results_dir}/retrieval_logs/...
+  max_rows: null            # optional, for dev
 
 # Timeline truncation configuration
 # Choose one of two modes:
@@ -74,4 +92,4 @@ subsample: true
 # Weill eval: which GPU nodes to use (0-7). Used by eval/weill.sh.
 # Override with WEILL_GPUS env or command-line args if needed.
 weill:
-  gpu_nodes: [3]
+  gpu_nodes: [4,5,6,7]

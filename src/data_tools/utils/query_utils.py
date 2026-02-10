@@ -2,6 +2,8 @@
 BigQuery query templates and execution helpers for VISTA data tools.
 Use these from subsample_csv, download scripts, or any future BQ query callers.
 """
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from google.cloud import bigquery
@@ -227,6 +229,39 @@ def fetch_person_id_nifti_paths(
     except Exception as e:
         print(f"  Warning: Error fetching (person_id, nifti_path) from BQ: {e}")
         return []
+
+
+# --- Vista benchmark task data ---
+
+VISTA_BENCH_DATASET = "vista_bench_v1_1"
+
+
+def get_vista_task_data_query(full_table_id: str) -> str:
+    """Return SQL for selecting all columns from vista_bench table filtered by task. Uses @task (STRING)."""
+    return f"""
+        SELECT *
+        FROM `{full_table_id}`
+        WHERE task = @task
+    """
+
+
+def fetch_task_data_from_bq(
+    bq_client: bigquery.Client,
+    full_table_id: str,
+    task_name: str,
+) -> Optional[pd.DataFrame]:
+    """
+    Query BigQuery for vista benchmark task data. Returns DataFrame or None on error/empty.
+    """
+    query = get_vista_task_data_query(full_table_id)
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("task", "STRING", task_name)]
+    )
+    try:
+        return bq_client.query(query, job_config=job_config).to_dataframe()
+    except Exception as e:
+        print(f"!!! BigQuery Error for {task_name}: {e}")
+        return None
 
 
 def check_ct_available_batch(

@@ -63,7 +63,7 @@ class PromptDataset(Dataset):
             df: Dataframe containing the data.
             prompt_col: The column name to use for the text prompt.
             add_options: Whether to append options to the prompt.
-            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', 'no_report', or 'report'
+            experiment: Experiment type - 'no_image', 'axial_1_image', 'all_image', 'axial_all_image', 'sagittal_all_image', 'no_timeline', 'no_report', 'timeline_only', or 'report'
             storage_client: GCP Storage client for loading NIfTI files from bucket (used when file not under ct_dir).
             model_type: Model type string (e.g., 'gemma3') to determine preprocessing.
             ct_dir: Optional path from config paths.ct_dir. If set and nifti_path (split to filename) exists under ct_dir, load from disk; else use GCP.
@@ -122,8 +122,8 @@ class PromptDataset(Dataset):
         img = None
         image_path = row.get('image_path', None)
         
-        # Skip image loading for 'no_image' and 'report' experiments
-        if self.experiment == 'no_image' or self.experiment == 'report':
+        # Skip image loading for 'no_image', 'report', 'timeline_only', and 'retrieved_timeline' experiments
+        if self.experiment in ('no_image', 'report', 'timeline_only', 'retrieved_timeline'):
             img = None
         else:
             # First check for image_path (existing behavior)
@@ -223,7 +223,7 @@ class PromptDataset(Dataset):
                                 if len(img_data.shape) > 2:
                                     depth = img_data.shape[2]
                                     img_list = []
-                                    num_slices = 100
+                                    num_slices = 50
                                     for i in range(num_slices):
                                         if num_slices > 1:
                                             position = i / (num_slices - 1)
@@ -241,7 +241,7 @@ class PromptDataset(Dataset):
                                 if len(img_data.shape) > 2:
                                     depth = img_data.shape[2]
                                     img_list = []
-                                    num_slices = 50
+                                    num_slices = 10
                                     for i in range(num_slices):
                                         if num_slices > 1:
                                             position = i / (num_slices - 1)
