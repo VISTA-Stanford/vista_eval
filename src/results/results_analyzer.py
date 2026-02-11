@@ -14,7 +14,7 @@ def _clean_extracted_answer(answer):
         answer = answer[1:-1].strip()
     prefixes = [
         r'^answer:\s*', r'^response:\s*', r'^the answer is\s*', r'^answer is\s*',
-        r'^the response is\s*', r'^response is\s*',
+        r'^the response is\s*', r'^response is\s*', r'^correct option is\s*',
     ]
     for p in prefixes:
         answer = re.sub(p, '', answer, flags=re.IGNORECASE).strip()
@@ -163,18 +163,17 @@ def _extract_answer(text):
     if pd.isna(text) or not str(text).strip():
         return ""
     text = str(text).strip()
-    boxed = _extract_boxed(text)
-    if boxed:
-        return _clean_extracted_answer(boxed[-1])
-    m = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
-    if m:
+    answer_matches = list(re.finditer(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE))
+    if answer_matches:
+        # Use the last instance of <answer></answer>
+        m = answer_matches[-1]
         content = m.group(1).strip()
         if content:
             return _clean_extracted_answer(content)
         # Empty tags: <answer></answer> - check if answer is right after the closing tag
-        after = re.search(r'</answer>\s*(.+)$', text, re.DOTALL | re.IGNORECASE)
-        if after:
-            return _clean_extracted_answer(after.group(1))
+        after_text = text[m.end():].strip()
+        if after_text:
+            return _clean_extracted_answer(after_text)
         # If <answer></answer> is empty and no content after, continue searching other patterns
         # (fall through to <label>, pipe, angle brackets, etc.) - don't return here
     
@@ -200,6 +199,17 @@ def _extract_answer(text):
     m = re.search(r'>\s*\|\s*(.+)$', text, re.DOTALL)
     if m:
         return _clean_extracted_answer(m.group(1))
+
+    # Check for angle brackets (e.g., <Yes> or <"Yes">) - but only short ones to avoid matching explanations
+    # Only match angle brackets that are short (<= 70 chars) to avoid matching long explanations
+    angle_matches = list(re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', text))
+    for angle_match in angle_matches:
+        content = angle_match.group(2).strip()
+        if content and content.lower() not in ['answer', 'label']:
+            # Only extract if it's a short answer (likely to be Yes/No/short label)
+            # Skip long explanations that are in angle brackets
+            if len(content) <= 70:
+                return _clean_extracted_answer(content)
     
     # Check for pipes (before angle brackets) to handle cases like "<explanation> | No"
     if '|' in text:
@@ -231,17 +241,6 @@ def _extract_answer(text):
                     if content and content.lower() not in ['answer', 'label']:
                         return _clean_extracted_answer(content)
                 return _clean_extracted_answer(last_part)
-    
-    # Check for angle brackets (e.g., <Yes> or <"Yes">) - but only short ones to avoid matching explanations
-    # Only match angle brackets that are short (<= 50 chars) to avoid matching long explanations
-    angle_matches = list(re.finditer(r'<(["\']?)([^<>"\'/]+?)\1>', text))
-    for angle_match in angle_matches:
-        content = angle_match.group(2).strip()
-        if content and content.lower() not in ['answer', 'label']:
-            # Only extract if it's a short answer (likely to be Yes/No/short label)
-            # Skip long explanations that are in angle brackets
-            if len(content) <= 50:
-                return _clean_extracted_answer(content)
 
         # Final check: if '|' is present and no answer found yet, check the left side of first '|'
     if '|' in text:
@@ -250,7 +249,10 @@ def _extract_answer(text):
             left_side = text[:first_pipe_idx].strip()
             if left_side:
                 return _clean_extracted_answer(left_side)
-    
+
+    boxed = _extract_boxed(text)
+    if boxed:
+        return _clean_extracted_answer(boxed[-1])
     words = text.split()
     if words:
         return _clean_extracted_answer(words[-1])

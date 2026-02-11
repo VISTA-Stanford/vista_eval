@@ -105,7 +105,7 @@ def run(
             print(f"[SKIP] No task_source_csv for task '{task_name}'")
             continue
 
-        csv_path = base_path / source_csv / f"{task_name}_subsampled.csv"
+        csv_path = base_path / "v1_2" / source_csv / f"{task_name}_subsampled.csv"
         if not csv_path.exists():
             print(f"[SKIP] File not found: {csv_path}")
             continue

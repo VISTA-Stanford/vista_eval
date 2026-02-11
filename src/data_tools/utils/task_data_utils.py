@@ -68,6 +68,8 @@ def merge_bq_with_timeline_csv(
     merge_cols = ['person_id', csv_timeline_col]
     if use_no_report_csv and 'report' in csv_df.columns:
         merge_cols.append('report')
+    if 'embed_time' in csv_df.columns:
+        merge_cols.append('embed_time')
 
     merge_df = csv_df[merge_cols].copy()
     merge_df = merge_df.rename(columns={csv_timeline_col: timeline_col})
@@ -77,6 +79,9 @@ def merge_bq_with_timeline_csv(
         df = df.drop(columns=[timeline_col])
     if 'report' in df.columns:
         df = df.drop(columns=['report'])
+    # Avoid duplicate embed_time when merging (prefer CSV value)
+    if 'embed_time' in merge_cols and 'embed_time' in df.columns:
+        df = df.drop(columns=['embed_time'])
 
     return df.merge(merge_df, on='person_id', how='inner')
 

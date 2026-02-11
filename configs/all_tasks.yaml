@@ -1,7 +1,7 @@
 paths:
   base_dir: "/home/rdcunha/vista_project/vista_bench"
-  results_dir: "/home/rdcunha/vista_project/results"
-  ct_dir: "/data/fries/vista_project_ryan/downloaded_ct_scans/chaudhari_lab/ct_data/ct_scans/vista/nov25"
+  results_dir: "/home/rdcunha/vista_project/results_v1_2"
+  ct_dir: "/data/fries/datasets/vista_project_ryan/downloaded_ct_scans/chaudhari_lab/ct_data/ct_scans/vista/nov25"
   valid_tasks: "tasks/valid_tasks.json"
   prompts: "tasks/prompts_by_task.json"
   image_prompts: "tasks/image_valid_tasks.json"
@@ -18,40 +18,40 @@ models:
   # - type: "intern"
   #   name: "OpenGVLab/InternVL3_5-8B"
   
-  - type: "gemma3"
-    name: "google/medgemma-1.5-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-1.5-4b-it"
 
-  - type: "gemma3"
-    name: "google/medgemma-4b-it"
+  # - type: "gemma3"
+  #   name: "google/medgemma-4b-it"
 
   - type: "qwen3vl"
     name: "Qwen/Qwen3-VL-8B-Instruct"
 
-  - type: "octomed"
-    name: "OctoMed/OctoMed-7B"
+  # - type: "octomed"
+  #   name: "OctoMed/OctoMed-7B"
 
 tasks:
   # - radiation_oligoprogression_answer
-  # - pneumonitis_infection_answer
+  # CVPR task
+  - pneumonitis_infection_answer
 
-  - early_stage_management_answer
-  - progression_assessment_discussed
-  - pneumonitis_infection_discussed
-  - died_of_cancer_1_yr
-  - died_of_cancer_2_yr
-  - died_of_cancer_3_yr
-  - died_of_cancer_4_yr
-  - died_of_cancer_5_yr
-  - has_recurrence_1_yr
-  - has_recurrence_2_yr
-  - has_recurrence_3_yr
-  - has_recurrence_4_yr
-  - has_recurrence_5_yr
-  # New tasks
-  - progression_recurrence_free_survival_1_yr
-  - progression_recurrence_free_survival_2_yr
-  - died_any_cause_1_yr
-  - died_any_cause_2_yr
+  # - early_stage_management_answer
+  # - progression_assessment_discussed
+  # - pneumonitis_infection_discussed
+  # - died_of_cancer_1_yr
+  # - died_of_cancer_2_yr
+  # - died_of_cancer_3_yr
+  # - died_of_cancer_4_yr
+  # - died_of_cancer_5_yr
+  # - has_recurrence_1_yr
+  # - has_recurrence_2_yr
+  # - has_recurrence_3_yr
+  # - has_recurrence_4_yr
+  # - has_recurrence_5_yr
+  # - progression_recurrence_free_survival_1_yr
+  # - progression_recurrence_free_survival_2_yr
+  # - died_any_cause_1_yr
+  # - died_any_cause_2_yr
 
 experiments:
   # - no_image # no image
@@ -59,18 +59,22 @@ experiments:
   # - all_image # middle image from each view
   # - axial_all_image # 10 axial images
   # - sagittal_all_image # 10 sagittal images
-  # - no_timeline # 100 axial images (no timeline)
-  - no_report # no radiology report
-  # - timeline_only # timeline only
-  # - report # radiology report
+  # - no_timeline # image
+  # - no_report # timeline + image
+  # - timeline_only # timeline
+  # - report # timeline + report
+  - retrieved_timeline # retrieved timeline
 
 # Retrieval (for retrieved_timeline experiment)
 retrieval:
-  enabled: false
-  corpus_dir: "/path/to/xml/subset"
-  cache_dir: "/path/to/bm25_cache"
-  max_iterations: 3
-  max_results_per_query: 15
+  enabled: true
+  corpus_dir: "/data/fries/datasets/vista_bench_ryan/thoracic_cohort_lumia"
+  # cache_dir: "/data/fries/users/rdcunha/bm25_cache"
+  cache_dir: "/home/rdcunha/vista_project/bm25_test"
+  max_iterations: 10
+  keywords_per_iteration: 5
+  records_per_keyword: 3
+  retrieval_batch_size: 8  # patients per VLM batch (use 1 for sequential)
   save_iterations_log: true
   iterations_log_dir: null  # default: {results_dir}/retrieval_logs/...
   max_rows: null            # optional, for dev
@@ -92,4 +96,4 @@ subsample: true
 # Weill eval: which GPU nodes to use (0-7). Used by eval/weill.sh.
 # Override with WEILL_GPUS env or command-line args if needed.
 weill:
-  gpu_nodes: [4,5,6,7]
+  gpu_nodes: [7]

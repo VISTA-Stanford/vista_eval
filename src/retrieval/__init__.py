@@ -1,7 +1,11 @@
 """Retrieval package for iterative VLM-driven patient timeline retrieval."""
 
 from retrieval.format_events import format_retrieved_events
-from retrieval.iterative_retrieval import run_iterative_retrieval, IterativeRetrievalResult
+from retrieval.iterative_retrieval import (
+    run_iterative_retrieval,
+    run_iterative_retrieval_batch,
+    IterativeRetrievalResult,
+)
 
 
 def __getattr__(name):
@@ -15,6 +19,7 @@ def __getattr__(name):
 __all__ = [
     "LocalPatientRetriever",
     "run_iterative_retrieval",
+    "run_iterative_retrieval_batch",
     "format_retrieved_events",
     "IterativeRetrievalResult",
 ]

@@ -29,7 +29,7 @@ def _parse_timestamp(ts: Any) -> Optional[datetime.datetime]:
 
 def format_retrieved_events(
     results: List[Dict[str, Any]],
-    exclude_report: bool = True,
+    exclude_report: bool = False,
 ) -> str:
     """
     Convert meds_mcp search results to patient_string format.

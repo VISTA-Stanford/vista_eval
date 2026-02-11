@@ -1,9 +1,9 @@
 """
-Remove STANFORD_NOTE/imaging from subsampled CSVs for tasks in all_tasks.yaml.
+Remove STANFORD_NOTE from subsampled CSVs for tasks in all_tasks.yaml.
 
-- Drops entire rows where patient_string contains 'STANFORD_NOTE/imaging'.
+- Drops entire rows where patient_string contains 'STANFORD_NOTE'.
 - For kept rows, removes from patient_string any timeline line matching
-  "[datetime] | STANFORD_NOTE/imaging" (and recomputes patient_string_character_len).
+  "[datetime] | STANFORD_NOTE" (and recomputes patient_string_character_len).
 
 Only processes tasks listed in vista_eval/configs/all_tasks.yaml and only
 subsampled CSVs when config has subsample: true.
@@ -123,7 +123,7 @@ def main(
         if not source_csv:
             print(f"[SKIP] No task_source_csv for task '{task_name}'")
             continue
-        csv_path = base_path / source_csv / f"{task_name}_subsampled.csv"
+        csv_path = base_path / "v1_2" / source_csv / f"{task_name}_subsampled.csv"
         if not csv_path.exists():
             print(f"[SKIP] File not found: {csv_path}")
             continue

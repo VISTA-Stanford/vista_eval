@@ -19,11 +19,11 @@ from data_tools.utils.query_utils import VISTA_BENCH_DATASET, fetch_task_data_fr
 from data_tools.utils.meds_timeline_utils import (
     count_unique_event_dates,
     truncate_timeline,
-    get_first_4_rows,
 )
 from data_tools.utils.task_data_utils import (
     resolve_local_bq_cache_path,
     resolve_timeline_csv_path,
+    resolve_timeline_csv_filename,
     find_bq_timeline_column,
     merge_bq_with_timeline_csv,
 )
@@ -95,12 +95,11 @@ class TaskOrchestrator:
         retrieval_cfg = self.cfg.get("retrieval", {})
         if retrieval_cfg.get("enabled"):
             try:
-                from retrieval import LocalPatientRetriever, run_iterative_retrieval
+                from retrieval import LocalPatientRetriever
                 self.retriever = LocalPatientRetriever(
                     corpus_dir=retrieval_cfg["corpus_dir"],
                     cache_dir=retrieval_cfg["cache_dir"],
                 )
-                self._run_iterative_retrieval = run_iterative_retrieval
             except ImportError as e:
                 raise ImportError(
                     "retrieval.enabled is true but meds_mcp not installed. "
@@ -203,10 +202,19 @@ class TaskOrchestrator:
         csv_path = resolve_timeline_csv_path(
             self.base_path, source_csv, task_name, use_subsampled, use_no_report_csv
         )
-        print(f"    Loading patient timelines from local CSV: {csv_path}")
         if not csv_path.exists():
-            print(f"!!! Error: Local CSV file not found at {csv_path}")
-            return None
+            # Try v1_2 path: base_path/v1_2/source_csv/filename
+            csv_path_v1_2 = self.base_path / "v1_2" / source_csv / resolve_timeline_csv_filename(
+                task_name, use_subsampled, use_no_report_csv
+            )
+            if csv_path_v1_2.exists():
+                csv_path = csv_path_v1_2
+                print(f"    Using v1_2 path: {csv_path}")
+            else:
+                print(f"!!! Error: Local CSV file not found at {csv_path}")
+                print(f"    Also checked v1_2 path: {csv_path_v1_2}")
+                return None
+        print(f"    Loading patient timelines from local CSV: {csv_path}")
         try:
             csv_df = pd.read_csv(csv_path)
             print(f"    Loaded {len(csv_df)} rows from local CSV.")
@@ -283,6 +291,7 @@ class TaskOrchestrator:
                     raise ValueError(
                         "retrieved_timeline experiment requires retrieval.enabled=true in config"
                     )
+                from retrieval import run_iterative_retrieval_batch
                 rc = self.retrieval_cfg
                 max_rows = rc.get("max_rows")
                 truncation_config = self.cfg.get("timeline_truncation", None)
@@ -295,31 +304,55 @@ class TaskOrchestrator:
                 if save_log:
                     Path(iterations_log_dir).mkdir(parents=True, exist_ok=True)
                 prompts_and_logs = []
-                for idx, row in tqdm(df_exp.iterrows(), total=len(df_exp), desc="Retrieval"):
-                    result = self._run_iterative_retrieval(
+                batch_size = rc.get("retrieval_batch_size", 8)
+                rows_list = list(df_exp.iterrows())
+                for i in tqdm(range(0, len(rows_list), batch_size), desc="Retrieval"):
+                    batch_rows = rows_list[i : i + batch_size]
+                    batch_data = []
+                    for _, r in batch_rows:
+                        entry = {
+                            "person_id": str(r["person_id"]),
+                            "question": str(r.get("question", r.get("label_description", ""))),
+                        }
+                        embed_time = r.get("embed_time")
+                        if embed_time is not None and pd.notna(embed_time):
+                            et = pd.to_datetime(embed_time, errors="coerce")
+                            if pd.notna(et):
+                                entry["end_date"] = et.strftime("%Y-%m-%d")
+                                start_dt = et - pd.DateOffset(months=6)
+                                entry["start_date"] = start_dt.strftime("%Y-%m-%d")
+                        batch_data.append(entry)
+                    results = run_iterative_retrieval_batch(
                         self.retriever, self.adapter, self.model, self.processor,
-                        person_id=str(row["person_id"]),
+                        batch_data=batch_data,
                         task_name=task_name,
-                        question=str(row.get("question", row.get("label_description", ""))),
                         max_iterations=rc.get("max_iterations", 3),
-                        max_results_per_query=rc.get("max_results_per_query", 15),
+                        keywords_per_iteration=rc.get("keywords_per_iteration", 5),
+                        records_per_keyword=rc.get("records_per_keyword", 5),
                     )
-                    first_4 = get_first_4_rows(row.get(timeline_col)) if pd.notna(row.get(timeline_col)) else ""
-                    combined = f"{first_4}\n{result.timeline_str}".strip() if first_4 else result.timeline_str
-                    combined = truncate_timeline(combined, truncation_config)
-                    prompts_and_logs.append((base_prompt_template.replace("[PATIENT_TIMELINE]", combined), result))
+                    for (_, row), result in zip(batch_rows, results):
+                        combined = truncate_timeline(result.timeline_str, truncation_config)
+                        prompts_and_logs.append((base_prompt_template.replace("[PATIENT_TIMELINE]", combined), result))
                 df_exp["dynamic_prompt"] = [p for p, _ in prompts_and_logs]
                 if save_log:
+                    csv_log_path = Path(iterations_log_dir) / "retrieval_keywords.csv"
+                    log_rows = []
                     for (_, row), (_, result) in zip(df_exp.iterrows(), prompts_and_logs):
-                        log_path = Path(iterations_log_dir) / f"{row['person_id']}_{row['index']}.json"
-                        with open(log_path, "w") as f:
-                            json.dump({
+                        for log_entry in result.iterations_log:
+                            log_rows.append({
                                 "person_id": str(row["person_id"]),
-                                "task_name": task_name,
-                                "index": int(row["index"]),
-                                "iterations": result.iterations_log,
-                                "all_keywords": result.all_keywords,
-                            }, f, indent=2)
+                                "task": task_name,
+                                "model": self.file_model_name,
+                                "iteration": log_entry["iteration"],
+                                "keywords": ", ".join(log_entry["keywords"]),
+                                "all_keywords_so_far": ", ".join(log_entry.get("all_keywords_so_far", [])),
+                                "keyword_reasoning": log_entry.get("keyword_reasoning", ""),
+                                "raw_model_output": log_entry.get("raw_model_output", ""),
+                                "num_results": sum(log_entry.get("num_results_per_keyword", [])),
+                                "total_unique": log_entry.get("total_unique_so_far", 0),
+                            })
+                    if log_rows:
+                        append_to_csv_util(csv_log_path, log_rows)
             else:
                 df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
