@@ -4,13 +4,13 @@
 # export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN}
 
 # Configuration
-CONFIG_FILE="configs/all_tasks.yaml"
+CONFIG_FILE="configs/all_tasks_nayebi.yaml"
 MAX_MODELS=4
 
-source /home/dcunhrya/vista_eval/.venv/bin/activate
+source /home/ryannayebi/vista_eval_vlm/.venv/bin/activate
 
 # Extract models from YAML config file using Python
-MODEL_LIST=$(cd /home/dcunhrya/vista_eval && python3 -c "
+MODEL_LIST=$(cd /home/ryannayebi/vista_eval_vlm && python3 -c "
 import yaml
 import sys
 

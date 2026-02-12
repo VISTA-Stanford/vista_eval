@@ -20,7 +20,7 @@ class Qwen3Adapter(BaseVLMAdapter):
             enable_prefix_caching=False,
             limit_mm_per_prompt={"image": 100, "video": 0},
             mm_processor_cache_gb=0,
-            max_model_len=120000,
+            max_model_len=16000,
         )
         
         # Load processor for chat template formatting

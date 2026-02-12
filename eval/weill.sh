@@ -18,7 +18,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # Configuration (same as bq_gcp.sh)
-CONFIG_FILE="configs/all_tasks.yaml"
+CONFIG_FILE="configs/all_tasks_nayebi.yaml"
 
 # Venv: use PROJECT_ROOT venv or override with VISTA_VENV
 if [ -n "$VISTA_VENV" ]; then
