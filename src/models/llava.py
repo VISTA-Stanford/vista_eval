@@ -1,5 +1,6 @@
 import torch
 from vllm import LLM, SamplingParams
+from vllm.sampling_params import StructuredOutputsParams
 from .base import BaseVLMAdapter
 
 class LlavaAdapter(BaseVLMAdapter):
@@ -26,9 +27,13 @@ class LlavaAdapter(BaseVLMAdapter):
     def prepare_inputs(self, messages, processor, model):
         return messages
 
-    def infer(self, llm, processor, inputs, max_new_tokens):
-        # answer = output.outputs[0].text
-        sampling_params = SamplingParams(temperature=0, max_tokens=max_new_tokens)
+    def infer(self, llm, processor, inputs, max_new_tokens, constrained_choices=None):
+        sampling_kwargs = {"temperature": 0, "max_tokens": max_new_tokens}
+        if constrained_choices:
+            sampling_kwargs["structured_outputs"] = StructuredOutputsParams(
+                choice=constrained_choices
+            )
+        sampling_params = SamplingParams(**sampling_kwargs)
         with torch.inference_mode():
             outputs = llm.generate(inputs, sampling_params=sampling_params)
 

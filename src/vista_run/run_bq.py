@@ -5,6 +5,10 @@ import yaml
 import torch
 import pandas as pd
 from pathlib import Path
+from collections import defaultdict
+from collections.abc import Mapping
+from queue import Queue
+from threading import Thread
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from google.cloud import bigquery
@@ -247,15 +251,142 @@ class TaskOrchestrator:
             df['unique_events'] = float("nan")
         return (df, timeline_col, source_csv)
 
+    def _prepare_batch_for_inference(self, batch, existing_indices, constrained_choices):
+        """
+        Prepare a batch for inference (CPU work: create_template, prepare_inputs).
+        Returns (new_items, inference_batches, max_input_tokens) or None if no new items.
+        inference_batches: list of {"indices": [...], "inputs": ...}
+        """
+        new_items = [item for item in batch if item['raw_row']['index'] not in existing_indices]
+        if not new_items:
+            return None
+
+        tokenizer = getattr(self.processor, "tokenizer", None) if getattr(self, "processor", None) else None
+        if tokenizer is None:
+            tokenizer = getattr(self.model, "tokenizer", None)
+
+        def _count_text_tokens(text: str) -> int:
+            if text is None:
+                return 0
+            text = str(text)
+            if tokenizer is not None and hasattr(tokenizer, "encode"):
+                try:
+                    return len(tokenizer.encode(text, add_special_tokens=False))
+                except (TypeError, Exception):
+                    try:
+                        return len(tokenizer.encode(text))
+                    except Exception:
+                        pass
+            return len(text.split())
+
+        def _count_input_tokens(inp) -> int:
+            if isinstance(inp, dict):
+                ids = inp.get("input_ids", None)
+                if ids is not None and hasattr(ids, "shape"):
+                    try:
+                        return int(ids.shape[-1]) if len(ids.shape) >= 2 else int(ids.shape[0])
+                    except Exception:
+                        pass
+                if "prompt" in inp:
+                    return _count_text_tokens(inp["prompt"])
+                if "text" in inp:
+                    return _count_text_tokens(inp["text"])
+                return 0
+            if isinstance(inp, tuple) and len(inp) >= 1:
+                return _count_text_tokens(inp[0])
+            if isinstance(inp, str):
+                return _count_text_tokens(inp)
+            return 0
+
+        max_input_tokens = 0
+        inference_batches = []
+
+        if 'gemma' in self.model_type:
+            def _get_image_group_key(item):
+                image = item.get('image', None)
+                if image is None:
+                    return 0
+                return len(image) if isinstance(image, list) else 1
+
+            groups = defaultdict(list)
+            for i, item in enumerate(new_items):
+                groups[_get_image_group_key(item)].append((i, item))
+
+            for key in sorted(groups.keys()):
+                indexed_items = groups[key]
+                indices = [x[0] for x in indexed_items]
+                items = [x[1] for x in indexed_items]
+                group_inputs = []
+                for item in items:
+                    try:
+                        if not isinstance(item, dict):
+                            raise TypeError(f"Expected item to be a dict, got {type(item)}")
+                        single_msg = self.adapter.create_template(item)
+                        single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
+                        if isinstance(single_inp, list):
+                            single_inp = single_inp[0] if single_inp else {}
+                        if isinstance(single_inp, Mapping) and not isinstance(single_inp, dict):
+                            single_inp = dict(single_inp)
+                        elif not isinstance(single_inp, dict):
+                            raise TypeError(f"Expected dict or Mapping, got {type(single_inp)}")
+                        group_inputs.append(single_inp)
+                    except Exception as e:
+                        print(f"Error preparing item: {e}")
+                        group_inputs.append({})
+                batched_inputs = self.adapter.stack_inputs(group_inputs, self.model)
+                inference_batches.append({"indices": indices, "inputs": batched_inputs})
+                for inp in group_inputs:
+                    token_count = _count_input_tokens(inp)
+                    if isinstance(inp, dict) and inp.get("multi_modal_data") and inp["multi_modal_data"].get("image"):
+                        images = inp["multi_modal_data"]["image"]
+                        num_images = len(images) if isinstance(images, list) else 1
+                        token_count += num_images * 256
+                    max_input_tokens = max(max_input_tokens, token_count)
+        else:
+            messages = [self.adapter.create_template(item) for item in new_items]
+            inputs = self.adapter.prepare_inputs(messages, self.processor, self.model)
+            inference_batches.append({"indices": list(range(len(new_items))), "inputs": inputs})
+            if isinstance(inputs, list):
+                for inp in inputs:
+                    max_input_tokens = max(max_input_tokens, _count_input_tokens(inp))
+            else:
+                max_input_tokens = max(max_input_tokens, _count_input_tokens(inputs))
+
+        return (new_items, inference_batches, max_input_tokens)
+
+    def _run_inference_on_batches(self, inference_batches, constrained_choices):
+        """Run inference on prepared batches, return outputs in order of indices."""
+        if not inference_batches:
+            return []
+        max_idx = max(i for b in inference_batches for i in b["indices"])
+        output_list = [""] * (max_idx + 1)
+        for batch in inference_batches:
+            indices = batch["indices"]
+            inputs = batch["inputs"]
+            outputs = self.adapter.infer(
+                self.model, self.processor, inputs,
+                self.cfg['runtime']["max_new_tokens"],
+                constrained_choices=constrained_choices
+            )
+            for i, out in zip(indices, outputs):
+                output_list[i] = out
+        return output_list
+
     def _process_single_task_with_data(self, task_info, experiment, df, timeline_col):
         """Run inference for one (task, experiment) using already-loaded task data."""
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
+        # Constrained decoding for binary tasks: force "Yes" or "No" from vLLM
+        constrained_choices = ["Yes", "No"] if task_info.get("is_binary", False) else None
 
         # We keep the local folder structure for results
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
         save_dir.mkdir(parents=True, exist_ok=True)
         out_file = save_dir / f"{task_name}_results_{experiment}.csv"
+
+        # Overwrite (don't resume) for retrieved_timeline experiment
+        if experiment == "retrieved_timeline":
+            out_file.unlink(missing_ok=True)
 
         existing_indices = set()
         if out_file.exists():
@@ -309,18 +440,20 @@ class TaskOrchestrator:
                 for i in tqdm(range(0, len(rows_list), batch_size), desc="Retrieval"):
                     batch_rows = rows_list[i : i + batch_size]
                     batch_data = []
+                    use_time_filter = rc.get("use_time_filter", False)
                     for _, r in batch_rows:
                         entry = {
                             "person_id": str(r["person_id"]),
                             "question": str(r.get("question", r.get("label_description", ""))),
                         }
-                        embed_time = r.get("embed_time")
-                        if embed_time is not None and pd.notna(embed_time):
-                            et = pd.to_datetime(embed_time, errors="coerce")
-                            if pd.notna(et):
-                                entry["end_date"] = et.strftime("%Y-%m-%d")
-                                start_dt = et - pd.DateOffset(months=6)
-                                entry["start_date"] = start_dt.strftime("%Y-%m-%d")
+                        if use_time_filter:
+                            embed_time = r.get("embed_time")
+                            if embed_time is not None and pd.notna(embed_time):
+                                et = pd.to_datetime(embed_time, errors="coerce")
+                                if pd.notna(et):
+                                    entry["end_date"] = et.strftime("%Y-%m-%d")
+                                    start_dt = et - pd.DateOffset(months=rc.get("months_before", 6))
+                                    entry["start_date"] = start_dt.strftime("%Y-%m-%d")
                         batch_data.append(entry)
                     results = run_iterative_retrieval_batch(
                         self.retriever, self.adapter, self.model, self.processor,
@@ -344,238 +477,86 @@ class TaskOrchestrator:
                                 "task": task_name,
                                 "model": self.file_model_name,
                                 "iteration": log_entry["iteration"],
-                                "keywords": ", ".join(log_entry["keywords"]),
+                                # "keywords": ", ".join(log_entry["keywords"]),
                                 "all_keywords_so_far": ", ".join(log_entry.get("all_keywords_so_far", [])),
-                                "keyword_reasoning": log_entry.get("keyword_reasoning", ""),
-                                "raw_model_output": log_entry.get("raw_model_output", ""),
+                                # "keyword_reasoning": log_entry.get("keyword_reasoning", ""),
+                                # "raw_model_output": log_entry.get("raw_model_output", ""),
                                 "num_results": sum(log_entry.get("num_results_per_keyword", [])),
                                 "total_unique": log_entry.get("total_unique_so_far", 0),
                             })
                     if log_rows:
-                        append_to_csv_util(csv_log_path, log_rows)
+                        pd.DataFrame(log_rows).to_csv(csv_log_path, mode="w", index=False)
             else:
                 df_exp['dynamic_prompt'] = df_exp[timeline_col].apply(lambda x: base_prompt_template.replace('[PATIENT_TIMELINE]', str(x)))
 
         ct_dir = self.cfg.get('paths', {}).get('ct_dir')
         dataset = PromptDataset(df=df_exp, prompt_col='dynamic_prompt', experiment=experiment, storage_client=self.storage_client, model_type=self.model_type, ct_dir=ct_dir) 
+        num_workers = 4
         loader = DataLoader(
             dataset,
             batch_size=self.cfg['runtime']['batch_size'],
             shuffle=False,
-            prefetch_factor=2,
+            prefetch_factor=8,
             collate_fn=prompt_collate,
-            num_workers=4
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
+            pin_memory=True,
         )
 
-        # 4. Inference Loop
+        # 4. Inference Loop (producer-consumer: overlap prepare_inputs with GPU infer)
         results_buffer = []
         batch_counter = 0
+        prefetch_queue = Queue(maxsize=2)
+        sentinel = object()
 
-        for batch in tqdm(loader, desc=f"Inference {task_name} | {experiment}"):
-            # Skip items already processed
-            new_items = [item for item in batch if item['raw_row']['index'] not in existing_indices]
-            
-            if not new_items:
-                continue
+        def producer():
+            try:
+                for batch in loader:
+                    prepared = self._prepare_batch_for_inference(batch, existing_indices, constrained_choices)
+                    if prepared is not None:
+                        prefetch_queue.put(prepared)
+            except Exception as e:
+                print(f"Producer error: {e}")
+            finally:
+                prefetch_queue.put(sentinel)
+
+        producer_thread = Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        pbar = tqdm(desc=f"Inference {task_name} | {experiment}")
+
+        while True:
+            got = prefetch_queue.get()
+            if got is sentinel:
+                break
+
+            new_items, inference_batches, max_input_tokens = got
 
             try:
-                max_input_tokens = 0
-                tokenizer = None
-                if getattr(self, "processor", None) is not None:
-                    tokenizer = getattr(self.processor, "tokenizer", None)
-                if tokenizer is None:
-                    tokenizer = getattr(self.model, "tokenizer", None)
+                outputs = self._run_inference_on_batches(inference_batches, constrained_choices)
 
-                def _count_text_tokens(text: str) -> int:
-                    if text is None:
-                        return 0
-                    text = str(text)
-                    if tokenizer is not None and hasattr(tokenizer, "encode"):
-                        try:
-                            # HuggingFace-style
-                            return len(tokenizer.encode(text, add_special_tokens=False))
-                        except TypeError:
-                            # Some tokenizers don't accept add_special_tokens
-                            return len(tokenizer.encode(text))
-                        except Exception:
-                            pass
-                    # Fallback (approximate)
-                    return len(text.split())
-
-                def _count_input_tokens(inp) -> int:
-                    # HF-style dict
-                    if isinstance(inp, dict):
-                        ids = inp.get("input_ids", None)
-                        if ids is not None and hasattr(ids, "shape"):
-                            try:
-                                # [B, T] or [T]
-                                if len(ids.shape) >= 2:
-                                    return int(ids.shape[-1])
-                                return int(ids.shape[0])
-                            except Exception:
-                                pass
-                        if "prompt" in inp:
-                            return _count_text_tokens(inp["prompt"])
-                        if "text" in inp:
-                            return _count_text_tokens(inp["text"])
-                        return 0
-                    # LMDeploy InternVL: either "text" or (text, image/images)
-                    if isinstance(inp, tuple) and len(inp) >= 1:
-                        return _count_text_tokens(inp[0])
-                    if isinstance(inp, str):
-                        return _count_text_tokens(inp)
-                    return 0
-
-                if 'gemma' in self.model_type:                 
-                    has_multiple_images = False
-                    has_single_images = False
-                    has_no_images = False
-                    
-                    for item in new_items:
-                        image = item.get('image', None)
-                        if image is not None:
-                            if isinstance(image, list):
-                                if len(image) > 1:
-                                    has_multiple_images = True
-                                elif len(image) == 1:
-                                    has_single_images = True
-                            else:
-                                has_single_images = True
-                        else:
-                            has_no_images = True
-                    
-                    should_process_individually = (
-                        has_multiple_images or
-                        (has_multiple_images and (has_single_images or has_no_images))
-                    )
-                    
-                    if should_process_individually:
-                        # Process items individually to handle different structures
-                        outputs = []
-                        for item in new_items:
-                            try:
-                                # Validate item is a dict
-                                if not isinstance(item, dict):
-                                    raise TypeError(f"Expected item to be a dict, got {type(item)}")
-                                
-                                single_msg = self.adapter.create_template(item)
-                                single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
-                                
-                                # prepare_inputs may return a dict (single item) or list (multiple items)
-                                # For single item, it should be a dict or dict-like (e.g., BatchFeature)
-                                if isinstance(single_inp, list):
-                                    # If it's a list with one item, extract it
-                                    if len(single_inp) == 1:
-                                        single_inp = single_inp[0]
-                                    else:
-                                        # Multiple items in list, process each
-                                        for inp in single_inp:
-                                            # Convert BatchFeature or other dict-like objects to dict if needed
-                                            from collections.abc import Mapping
-                                            if isinstance(inp, Mapping) and not isinstance(inp, dict):
-                                                inp = dict(inp)
-                                            elif not isinstance(inp, dict):
-                                                raise TypeError(f"Expected input to be a dict or dict-like (Mapping), got {type(inp)}")
-                                            single_output = self.adapter.infer(self.model, self.processor, inp, self.cfg['runtime']["max_new_tokens"])
-                                            if isinstance(single_output, list):
-                                                outputs.extend(single_output)
-                                            else:
-                                                outputs.append(single_output)
-                                        continue
-                                
-                                # Convert BatchFeature or other dict-like objects to dict if needed
-                                from collections.abc import Mapping
-                                if isinstance(single_inp, Mapping) and not isinstance(single_inp, dict):
-                                    single_inp = dict(single_inp)
-                                elif not isinstance(single_inp, dict):
-                                    raise TypeError(f"Expected prepare_inputs to return a dict or dict-like (Mapping) for single item, got {type(single_inp)}")
-                                
-                                # Calculate input tokens for this item
-                                token_count = _count_input_tokens(single_inp)
-                                # Optional: rough image-token bump for vLLM Gemma prompts (kept approximate)
-                                if isinstance(single_inp, dict) and single_inp.get("multi_modal_data") and single_inp["multi_modal_data"].get("image"):
-                                    images = single_inp["multi_modal_data"]["image"]
-                                    num_images = len(images) if isinstance(images, list) else 1
-                                    token_count += num_images * 256
-                                max_input_tokens = max(max_input_tokens, token_count)
-                                
-                                single_output = self.adapter.infer(self.model, self.processor, single_inp, self.cfg['runtime']["max_new_tokens"])
-                                # Ensure single_output is a list
-                                if isinstance(single_output, list):
-                                    outputs.extend(single_output)
-                                else:
-                                    outputs.append(single_output)
-                            except Exception as e:
-                                print(f"Error processing item individually: {e}")
-                                import traceback
-                                traceback.print_exc()
-                                # Add empty string as placeholder to maintain alignment
-                                outputs.append("")
-                    
-                    # Log maximum input tokens for individually processed batch
-                    if should_process_individually:
-                        print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
-                    else:
-                        # All items have similar structure, batch them together
-                        all_inputs = []
-                        for item in new_items:
-                            single_msg = self.adapter.create_template(item)
-                            single_inp = self.adapter.prepare_inputs([single_msg], self.processor, self.model)
-                            
-                            # prepare_inputs returns dict for single item or list for multiple
-                            if isinstance(single_inp, list):
-                                # If list, extract the single item (should be only one)
-                                if len(single_inp) == 1:
-                                    single_inp = single_inp[0]
-                                else:
-                                    raise ValueError(f"Expected single input from prepare_inputs, got list with {len(single_inp)} items")
-                            
-                            # Convert BatchFeature or other dict-like objects to dict if needed
-                            from collections.abc import Mapping
-                            if isinstance(single_inp, Mapping) and not isinstance(single_inp, dict):
-                                single_inp = dict(single_inp)
-                            elif not isinstance(single_inp, dict):
-                                raise TypeError(f"Expected prepare_inputs to return a dict or dict-like (Mapping), got {type(single_inp)}")
-                            
-                            all_inputs.append(single_inp)
-                        
-                        batched_inputs = self.adapter.stack_inputs(all_inputs, self.model)
-                        
-                        # Calculate max input tokens for batched inputs
-                        for inp in all_inputs:
-                            token_count = _count_input_tokens(inp)
-                            # Optional: rough image-token bump for vLLM Gemma prompts (kept approximate)
-                            if isinstance(inp, dict) and inp.get("multi_modal_data") and inp["multi_modal_data"].get("image"):
-                                images = inp["multi_modal_data"]["image"]
-                                num_images = len(images) if isinstance(images, list) else 1
-                                token_count += num_images * 256
-                            max_input_tokens = max(max_input_tokens, token_count)
-                        
-                        outputs = self.adapter.infer(self.model, self.processor, batched_inputs, self.cfg['runtime']["max_new_tokens"])
-                        
-                        # Log maximum input tokens for batched processing
-                        print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
-                else:
-                    messages = [self.adapter.create_template(item) for item in new_items]
-                    inputs = self.adapter.prepare_inputs(messages, self.processor, self.model)
-                    
-                    # Calculate max input tokens
-                    if isinstance(inputs, list):
-                        for inp in inputs:
-                            max_input_tokens = max(max_input_tokens, _count_input_tokens(inp))
-                    else:
-                        max_input_tokens = max(max_input_tokens, _count_input_tokens(inputs))
-                    
-                    outputs = self.adapter.infer(self.model, self.processor, inputs, self.cfg['runtime']["max_new_tokens"])
-                    
-                    # Log maximum input tokens for non-gemma models
-                    print(f"Batch {batch_counter + 1}: Max input tokens = {max_input_tokens}")
-                
                 # Process outputs
-                for item, out_text in zip(new_items, outputs):
+                for item, out in zip(new_items, outputs):
                     # We drop the heavy timeline column before saving to CSV
-                    res_row = item['raw_row'].drop(labels=[timeline_col]).to_dict()
-                    res_row['model_response'] = out_text
+                    if timeline_col in item['raw_row']:
+                        res_row = item['raw_row'].drop(labels=[timeline_col]).to_dict()
+                    else:
+                        res_row = item['raw_row'].to_dict()
+                    # if 'note_text' in res_row:
+                    #     res_row = item['raw_row'].drop(labels=["note_text"]).to_dict()
+                    # if 'patient_string' in res_row:
+                    #     res_row = item['raw_row'].drop(labels=["patient_string"]).to_dict()
+                    # if 'report' in res_row:
+                    #     res_row = item['raw_row'].drop(labels=["report"]).to_dict()
+                    # Handle both dict (with logprobs) and legacy string output
+                    if isinstance(out, dict):
+                        res_row['model_response'] = out.get("text", "")
+                        res_row['cumulative_logprob'] = out.get("cumulative_logprob")
+                        res_row['log_probs'] = out.get("log_probs")
+                    else:
+                        res_row['model_response'] = out
+                        res_row['cumulative_logprob'] = None
+                        res_row['log_probs'] = None
                     
                     # Check if image was actually used
                     image = item.get('image', None)
@@ -591,21 +572,26 @@ class TaskOrchestrator:
                     results_buffer.append(res_row)
                 
                 batch_counter += 1
+                pbar.update(1)
+                print(f"Batch {batch_counter}: Max input tokens = {max_input_tokens}")
 
-                # Flush to disk every 20 batches
+                # Flush to disk every 10 batches
                 if batch_counter % 10 == 0:
                     append_to_csv_util(out_file, results_buffer)
                     results_buffer = []
 
-                # Clear CUDA cache periodically
-                if batch_counter % 5 == 0:
+                # Clear CUDA cache periodically (reduced frequency to avoid sync stalls)
+                if batch_counter % 20 == 0:
                     torch.cuda.empty_cache()
 
             except Exception as e:
                 print(f"Error in batch: {e}")
-                # Still log batch info even on error (batch_counter already incremented)
-                print(f"Batch {batch_counter}: Max input tokens = {max_input_tokens} (error occurred)")
-                continue
+                print(f"Max input tokens = {max_input_tokens} (error occurred)")
+                # import traceback
+                # traceback.print_exc()
+
+        pbar.close()
+        producer_thread.join(timeout=5)
 
         # 6. Final Save for remaining items
         if results_buffer:

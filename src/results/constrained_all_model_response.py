@@ -1,37 +1,24 @@
 """
 Build a per-question metrics table (one row per question per model per task per experiment)
-with extracted model response, predicted numerical label, and ground-truth label.
+with model response, predicted numerical label, and ground-truth label.
+For constrained decoding: model output is always binary "Yes" or "No", so we map directly
+to the label without extraction or cleaning.
 Uses the same result file discovery as final_metrics.py (config tasks, models, experiments).
-Output: figures/results_stats/all_model_response.csv with columns model_name, task, experiment,
-index, person_id (if present in source), model_response_cleaned, predicted_label, ground_truth.
+Output: figures/results_stats/constrained_all_model_response.csv with columns model_name, task,
+experiment, index, person_id (if present in source), model_response, predicted_label, ground_truth.
 """
 
 import json
-import re
 from pathlib import Path
 
 import pandas as pd
 
-from results.results_analyzer import _extract_answer, map_label_to_answer
+from results.results_analyzer import map_label_to_answer
 from results.final_metrics import (
     load_config,
     collect_result_files,
     extract_experiment_from_filename,
 )
-
-
-def strip_answer_choice_prefix(text):
-    """
-    Strip answer choice prefixes like 'A:', 'B:', 'C:', etc. from the beginning of text.
-    Example: 'C: Surgery alone' -> 'Surgery alone'
-    """
-    if pd.isna(text) or not str(text).strip():
-        return text
-    text = str(text).strip()
-    # Match pattern: letter (A-Z) followed by colon and optional whitespace at the start
-    pattern = r'^[A-Z]:\s*'
-    stripped = re.sub(pattern, '', text, flags=re.IGNORECASE)
-    return stripped.strip() if stripped != text else text
 
 
 EXPERIMENT_DISPLAY_NAMES = {
@@ -41,18 +28,49 @@ EXPERIMENT_DISPLAY_NAMES = {
 }
 
 
-def map_answer_to_label_key(cleaned_answer, mapping):
+def extract_response_logprob(log_probs_str, model_response):
     """
-    Map an extracted answer string back to the numerical label key (e.g. "0", "1", "-1")
-    using the task's mapping. Returns None if no mapping matches (case-insensitive).
+    Extract the log probability of the model_response token from the log_probs JSON.
+    For binary Yes/No, we find the token whose decoded_token matches model_response.
+    Falls back to cumulative_logprob when available (single-token output).
     """
-    if not mapping or (cleaned_answer is not None and pd.isna(cleaned_answer)):
+    if pd.isna(model_response) or not str(model_response).strip():
+        return None
+    response_str = str(model_response).strip().lower()
+    if not log_probs_str or (isinstance(log_probs_str, float) and pd.isna(log_probs_str)):
+        return None
+    try:
+        data = json.loads(log_probs_str)
+        if not data:
+            return None
+        for pos_data in data:
+            if pos_data is None:
+                continue
+            for entry in pos_data:
+                if isinstance(entry, dict):
+                    decoded = entry.get("decoded_token", "")
+                    if decoded and str(decoded).strip().lower() == response_str:
+                        lp = entry.get("logprob")
+                        return float(lp) if lp is not None else None
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def map_yes_no_to_label(response, mapping):
+    """
+    Map a constrained binary "Yes" or "No" response directly to the numerical label.
+    Returns -1 if no output is present or if the response is not "Yes" or "No".
+    """
+    if not mapping:
         return -1
-    cleaned = str(cleaned_answer).strip().lower()
-    if not cleaned:
+    if pd.isna(response) or not str(response).strip():
+        return -1
+    s = str(response).strip().lower()
+    if not s:
         return -1
     for key, value in mapping.items():
-        if value is not None and str(value).strip().lower() == cleaned:
+        if value is not None and str(value).strip().lower() == s:
             return key
     return -1
 
@@ -123,19 +141,32 @@ def main(config_path=None, output_path=None):
                 if "model_response" not in combined.columns:
                     continue
 
-                combined["model_response_cleaned"] = combined["model_response"].apply(_extract_answer)
-                # Strip answer choice prefixes (e.g., "C: Surgery alone" -> "Surgery alone")
-                combined["model_response_cleaned"] = combined["model_response_cleaned"].apply(strip_answer_choice_prefix)
-                combined["predicted_label"] = combined["model_response_cleaned"].apply(
-                    lambda x: map_answer_to_label_key(x, mapping)
+                # Direct mapping: model_response is binary "Yes" or "No", no extraction needed
+                combined["model_response_stripped"] = combined["model_response"].apply(
+                    lambda x: str(x).strip() if pd.notna(x) and str(x).strip() else ""
+                )
+                combined["predicted_label"] = combined["model_response"].apply(
+                    lambda x: map_yes_no_to_label(x, mapping)
                 )
                 combined["ground_truth"] = combined["label"].apply(
                     lambda lbl: map_label_to_answer(lbl, mapping)
                 )
                 # Map ground_truth (mapped answer string) back to numerical label key
                 combined["ground_truth_label"] = combined["ground_truth"].apply(
-                    lambda x: map_answer_to_label_key(x, mapping)
+                    lambda x: map_yes_no_to_label(x, mapping)
                 )
+
+                # Extract log prob of the model_response token from log_probs JSON
+                def get_response_logprob(row):
+                    lp = extract_response_logprob(
+                        row.get("log_probs"),
+                        row.get("model_response_stripped", row.get("model_response")),
+                    )
+                    if lp is not None:
+                        return lp
+                    return row.get("cumulative_logprob")  # fallback for single-token output
+
+                combined["response_log_prob"] = combined.apply(get_response_logprob, axis=1)
 
                 chunk = pd.DataFrame({
                     "model_name": model_name,
@@ -143,10 +174,13 @@ def main(config_path=None, output_path=None):
                     "experiment": experiment,
                     "index": combined["index"] if "index" in combined.columns else combined.index,
                     "person_id": combined["person_id"] if "person_id" in combined.columns else None,
-                    "model_response_cleaned": combined["model_response_cleaned"],
+                    "model_response": combined["model_response_stripped"],
                     "predicted_label": combined["predicted_label"],
                     "ground_truth": combined["ground_truth"],
                     "ground_truth_label": combined["ground_truth_label"],
+                    "cumulative_logprob": combined["cumulative_logprob"] if "cumulative_logprob" in combined.columns else None,
+                    "log_probs": combined["log_probs"] if "log_probs" in combined.columns else None,
+                    "response_log_prob": combined["response_log_prob"] if "response_log_prob" in combined.columns else None,
                 })
                 out_chunks.append(chunk)
 
@@ -160,9 +194,11 @@ def main(config_path=None, output_path=None):
     print(f"Number of rows where predicted_label is -1 by model: {minus_one_count}")
     minus_one_count_gt = out_df[out_df["ground_truth_label"] == -1].groupby("model_name").size()
     print(f"Number of rows where ground_truth_label is -1 by model: {minus_one_count_gt}")
-    
+    # Drop rows where ground_truth_label is -1
+    out_df = out_df[out_df["ground_truth_label"] != -1]
+    print(f"Dropped {len(minus_one_count_gt)} rows where ground_truth_label is -1")
     if output_path is None:
-        output_path = Path(__file__).resolve().parents[2] / "figures" / "results_stats" / "all_model_response.csv"
+        output_path = Path(__file__).resolve().parents[2] / "figures" / "results_stats" / "constrained_all_model_response.csv"
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(output_path, index=False)

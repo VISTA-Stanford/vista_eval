@@ -105,8 +105,7 @@ class LlavaMedAdapter(BaseVLMAdapter):
         
         return [input_ids, image_tensor, attention_mask]
 
-    def infer(self, model, processor, inputs, max_new_tokens):
-        # answer = output.outputs[0].text
+    def infer(self, model, processor, inputs, max_new_tokens, constrained_choices=None):
         input_ids, image_tensor, attention_mask = inputs
         with torch.inference_mode():
             out_ids = self.model.generate(
@@ -119,4 +118,14 @@ class LlavaMedAdapter(BaseVLMAdapter):
             )
         
         outputs = [self.tokenizer.decode(o, skip_special_tokens=True).strip() for o in out_ids]
+        if constrained_choices == ["Yes", "No"]:
+            import re
+            extracted = []
+            for o in outputs:
+                if o in ("Yes", "No"):
+                    extracted.append(o)
+                else:
+                    m = re.search(r"\b(Yes|No)\b", o, re.IGNORECASE)
+                    extracted.append("Yes" if m and m.group(1).lower() == "yes" else ("No" if m else o))
+            return extracted
         return outputs
