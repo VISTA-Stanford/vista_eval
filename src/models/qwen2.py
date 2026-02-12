@@ -80,7 +80,7 @@ class Qwen2Adapter(BaseVLMAdapter):
     
         return inputs
 
-    def infer(self, model, processor, inputs, max_new_tokens):
+    def infer(self, model, processor, inputs, max_new_tokens, constrained_choices=None):
         with torch.inference_mode():
             generated_ids = model.generate(
                 **inputs,
@@ -98,5 +98,15 @@ class Qwen2Adapter(BaseVLMAdapter):
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False
         )
-
+        if constrained_choices == ["Yes", "No"]:
+            import re
+            extracted = []
+            for o in outputs:
+                o = o.strip()
+                if o in ("Yes", "No"):
+                    extracted.append(o)
+                else:
+                    m = re.search(r"\b(Yes|No)\b", o, re.IGNORECASE)
+                    extracted.append("Yes" if m and m.group(1).lower() == "yes" else ("No" if m else o))
+            return extracted
         return outputs

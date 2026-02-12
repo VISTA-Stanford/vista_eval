@@ -11,6 +11,7 @@ set -e
 # Avoid vLLM/Pydantic "latin-1 codec can't encode character" when model config has Unicode (e.g. fancy quotes)
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 export LANG="${LANG:-en_US.UTF-8}"
+export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
 # Project root (directory containing configs/ and src/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -5,8 +5,9 @@ import torch
 from typing import List, Dict, Any, Union
 from PIL import Image
 from vllm import LLM, SamplingParams
+from vllm.sampling_params import StructuredOutputsParams
 from transformers import AutoProcessor
-from .base import BaseVLMAdapter
+from .base import BaseVLMAdapter, serialize_logprobs
 
 class Qwen3Adapter(BaseVLMAdapter):
     def load(self):
@@ -130,9 +131,11 @@ class Qwen3Adapter(BaseVLMAdapter):
         
         return all_inputs
 
-    def infer(self, model, processor, inputs, max_new_tokens):
+    def infer(self, model, processor, inputs, max_new_tokens, constrained_choices=None):
         """
         Run inference using vLLM generate() API.
+        When constrained_choices is provided (e.g. ["Yes", "No"] for binary tasks),
+        uses vLLM structured outputs to force the model to output exactly one of them.
         """
         # 1. Standardize to list
         if isinstance(inputs, dict):
@@ -142,13 +145,18 @@ class Qwen3Adapter(BaseVLMAdapter):
         else:
             raise TypeError(f"Expected inputs to be dict or list, got {type(inputs)}")
         
-        # 2. Sampling Params
-        sampling_params = SamplingParams(
-            temperature=0.0,
-            max_tokens=max_new_tokens,
-            # Qwen models sometimes need explicit stop tokens
-            stop_token_ids=[151645, 151643] 
-        )
+        # 2. Sampling Params (with optional constrained decoding for binary tasks)
+        sampling_kwargs = {
+            "temperature": 0.0,
+            "max_tokens": max_new_tokens,
+            "stop_token_ids": [151645, 151643],
+        }
+        if constrained_choices:
+            sampling_kwargs["structured_outputs"] = StructuredOutputsParams(
+                choice=constrained_choices
+            )
+            sampling_kwargs["logprobs"] = 2  # Return logprobs for Yes/No confidence
+        sampling_params = SamplingParams(**sampling_kwargs)
         
         # 3. Run Inference
         # FIX: Pass the 'request_list' directly to generate.
@@ -160,13 +168,22 @@ class Qwen3Adapter(BaseVLMAdapter):
             use_tqdm=False
         )
         
-        # 4. Extract Text
+        # 4. Extract Text and logprobs (for binary tasks)
         results = []
         for output in outputs:
             if hasattr(output, 'outputs') and len(output.outputs) > 0:
-                results.append(output.outputs[0].text.strip())
+                co = output.outputs[0]
+                text = co.text.strip()
+                cum_lp = getattr(co, 'cumulative_logprob', None)
+                lp = getattr(co, 'logprobs', None)
+                logprobs_str = serialize_logprobs(lp) if lp is not None else None
+                results.append({
+                    "text": text,
+                    "cumulative_logprob": cum_lp,
+                    "log_probs": logprobs_str,
+                })
             else:
-                results.append("")
+                results.append({"text": "", "cumulative_logprob": None, "log_probs": None})
         
         return results
 
