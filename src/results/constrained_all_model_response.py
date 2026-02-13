@@ -1,8 +1,8 @@
 """
 Build a per-question metrics table (one row per question per model per task per experiment)
 with model response, predicted numerical label, and ground-truth label.
-For constrained decoding: model output is always binary "Yes" or "No", so we map directly
-to the label without extraction or cleaning.
+For constrained decoding, map model_response directly to task mapping labels (multiclass included),
+using normalized string matching (trim/case/whitespace).
 Uses the same result file discovery as final_metrics.py (config tasks, models, experiments).
 Output: figures/results_stats/constrained_all_model_response.csv with columns model_name, task,
 experiment, index, person_id (if present in source), model_response, predicted_label, ground_truth.
@@ -31,8 +31,8 @@ EXPERIMENT_DISPLAY_NAMES = {
 def extract_response_logprob(log_probs_str, model_response):
     """
     Extract the log probability of the model_response token from the log_probs JSON.
-    For binary Yes/No, we find the token whose decoded_token matches model_response.
-    Falls back to cumulative_logprob when available (single-token output).
+    This works best for single-token responses (e.g., Yes/No).
+    Falls back to cumulative_logprob when available.
     """
     if pd.isna(model_response) or not str(model_response).strip():
         return None
@@ -57,20 +57,43 @@ def extract_response_logprob(log_probs_str, model_response):
         return None
 
 
-def map_yes_no_to_label(response, mapping):
+def normalize_label_text(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return " ".join(str(value).strip().lower().split())
+
+
+def sorted_mapping_items(mapping):
+    def sort_key(item):
+        key = item[0]
+        try:
+            return (0, float(key))
+        except (TypeError, ValueError):
+            return (1, str(key))
+    return sorted(mapping.items(), key=sort_key)
+
+
+def map_response_to_label(response, mapping):
     """
-    Map a constrained binary "Yes" or "No" response directly to the numerical label.
-    Returns -1 if no output is present or if the response is not "Yes" or "No".
+    Map a constrained response directly to a mapping key using normalized text matching.
+    Returns -1 if no output is present or if the response does not match any mapping value.
     """
     if not mapping:
         return -1
     if pd.isna(response) or not str(response).strip():
         return -1
-    s = str(response).strip().lower()
-    if not s:
+    response_norm = normalize_label_text(response)
+    if not response_norm:
         return -1
-    for key, value in mapping.items():
-        if value is not None and str(value).strip().lower() == s:
+
+    # Primary: match mapping values (label text).
+    for key, value in sorted_mapping_items(mapping):
+        if normalize_label_text(value) == response_norm:
+            return key
+
+    # Fallback: allow direct key outputs (e.g., "0", "1", "-1").
+    for key, _ in sorted_mapping_items(mapping):
+        if normalize_label_text(key) == response_norm:
             return key
     return -1
 
@@ -141,19 +164,19 @@ def main(config_path=None, output_path=None):
                 if "model_response" not in combined.columns:
                     continue
 
-                # Direct mapping: model_response is binary "Yes" or "No", no extraction needed
+                # Direct mapping for constrained decoding output (binary and multiclass).
                 combined["model_response_stripped"] = combined["model_response"].apply(
                     lambda x: str(x).strip() if pd.notna(x) and str(x).strip() else ""
                 )
                 combined["predicted_label"] = combined["model_response"].apply(
-                    lambda x: map_yes_no_to_label(x, mapping)
+                    lambda x: map_response_to_label(x, mapping)
                 )
                 combined["ground_truth"] = combined["label"].apply(
                     lambda lbl: map_label_to_answer(lbl, mapping)
                 )
                 # Map ground_truth (mapped answer string) back to numerical label key
                 combined["ground_truth_label"] = combined["ground_truth"].apply(
-                    lambda x: map_yes_no_to_label(x, mapping)
+                    lambda x: map_response_to_label(x, mapping)
                 )
 
                 # Extract log prob of the model_response token from log_probs JSON
@@ -189,14 +212,16 @@ def main(config_path=None, output_path=None):
         return
 
     out_df = pd.concat(out_chunks, ignore_index=True)
+    is_minus_one = lambda x: str(x).strip() == "-1"
     # count the number of rows where predicted_label is -1 by model
-    minus_one_count = out_df[out_df["predicted_label"] == -1].groupby("model_name").size()
+    minus_one_count = out_df[out_df["predicted_label"].apply(is_minus_one)].groupby("model_name").size()
     print(f"Number of rows where predicted_label is -1 by model: {minus_one_count}")
-    minus_one_count_gt = out_df[out_df["ground_truth_label"] == -1].groupby("model_name").size()
+    minus_one_count_gt = out_df[out_df["ground_truth_label"].apply(is_minus_one)].groupby("model_name").size()
     print(f"Number of rows where ground_truth_label is -1 by model: {minus_one_count_gt}")
     # Drop rows where ground_truth_label is -1
-    out_df = out_df[out_df["ground_truth_label"] != -1]
-    print(f"Dropped {len(minus_one_count_gt)} rows where ground_truth_label is -1")
+    before_drop = len(out_df)
+    out_df = out_df[~out_df["ground_truth_label"].apply(is_minus_one)]
+    print(f"Dropped {before_drop - len(out_df)} rows where ground_truth_label is -1")
     if output_path is None:
         output_path = Path(__file__).resolve().parents[2] / "figures" / "results_stats" / "constrained_all_model_response.csv"
     output_path = Path(output_path)

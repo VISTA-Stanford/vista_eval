@@ -4,6 +4,7 @@ import json
 import yaml
 import torch
 import pandas as pd
+import re
 from pathlib import Path
 from collections import defaultdict
 from collections.abc import Mapping
@@ -113,6 +114,17 @@ class TaskOrchestrator:
             self.retriever = None
         self.retrieval_cfg = retrieval_cfg
 
+        # 7. Constrained decoding configuration
+        self.constrained_cfg = {
+            "enabled": True,
+            "mode": "task_mapping",   # task_mapping | binary_only
+            "exclude_insufficient": True,
+            "max_choices": 12,
+        }
+        user_constrained_cfg = self.cfg.get("constrained_decoding", {})
+        if isinstance(user_constrained_cfg, dict):
+            self.constrained_cfg.update(user_constrained_cfg)
+
     def _set_envs(self, model_dir):
         os.environ.update({
             "HF_HOME": model_dir,
@@ -120,6 +132,78 @@ class TaskOrchestrator:
             "VLLM_CACHE_ROOT": model_dir,
             "TOKENIZERS_PARALLELISM": "false"
         })
+
+    @staticmethod
+    def _normalize_choice_text(text):
+        return re.sub(r"\s+", " ", str(text).strip().lower())
+
+    @staticmethod
+    def _is_insufficient_choice(text):
+        normalized = TaskOrchestrator._normalize_choice_text(text)
+        return ("insufficient" in normalized) or ("missing data" in normalized)
+
+    @staticmethod
+    def _sorted_mapping_items(mapping):
+        def _sort_key(item):
+            key = item[0]
+            try:
+                return (0, float(key))
+            except (TypeError, ValueError):
+                return (1, str(key))
+        return sorted(mapping.items(), key=_sort_key)
+
+    def build_constrained_choices(self, task_info):
+        """
+        Build deterministic constrained choices per task.
+        - Binary tasks preserve legacy behavior: ["Yes", "No"].
+        - Non-binary tasks use task mapping labels (optionally excluding insufficient/missing labels).
+        """
+        if not self.constrained_cfg.get("enabled", True):
+            return None
+
+        mode = str(self.constrained_cfg.get("mode", "task_mapping")).strip().lower()
+        is_binary = bool(task_info.get("is_binary", False))
+
+        if mode == "binary_only":
+            return ["Yes", "No"] if is_binary else None
+
+        # Preserve existing binary behavior exactly.
+        if is_binary:
+            return ["Yes", "No"]
+
+        mapping = task_info.get("mapping")
+        if not isinstance(mapping, dict) or not mapping:
+            return None
+
+        exclude_insufficient = bool(self.constrained_cfg.get("exclude_insufficient", True))
+        max_choices = self.constrained_cfg.get("max_choices", 12)
+
+        choices = []
+        seen = set()
+        for _, value in self._sorted_mapping_items(mapping):
+            if value is None:
+                continue
+            choice = str(value).strip()
+            if not choice:
+                continue
+            if exclude_insufficient and self._is_insufficient_choice(choice):
+                continue
+            normalized = self._normalize_choice_text(choice)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            choices.append(choice)
+
+        if isinstance(max_choices, int) and max_choices > 0 and len(choices) > max_choices:
+            print(
+                f"    Constrained choices exceeded max_choices={max_choices}; "
+                f"truncating from {len(choices)} to {max_choices}."
+            )
+            choices = choices[:max_choices]
+
+        if len(choices) < 2:
+            return None
+        return choices
 
     def run_inference(self, task_names=None):
         # Determine which tasks to run
@@ -376,8 +460,11 @@ class TaskOrchestrator:
         """Run inference for one (task, experiment) using already-loaded task data."""
         task_name = task_info['task_name']
         source_csv = task_info['task_source_csv']
-        # Constrained decoding for binary tasks: force "Yes" or "No" from vLLM
-        constrained_choices = ["Yes", "No"] if task_info.get("is_binary", False) else None
+        constrained_choices = self.build_constrained_choices(task_info)
+        if constrained_choices:
+            print(f"    Constrained decoding enabled with {len(constrained_choices)} choices.")
+        else:
+            print("    Constrained decoding disabled for this task.")
 
         # We keep the local folder structure for results
         save_dir = self.results_base / source_csv / task_name / self.file_model_name
